@@ -106,7 +106,7 @@ describe('scan', () => {
     try {
       const appdata = join(home, 'AppData', 'Roaming')
       await mkdir(join(appdata, 'npm', 'node_modules', '@anthropic-ai', 'claude-code'), { recursive: true })
-      await makeFile(join(home, 'bin', 'claude.exe'))
+      await makeFile(join(home, 'bin', 'claude.EXE'))
       await makeFile(join(home, '.claude', 'settings.json'))
       const probe = vi.fn(async () => true)
 
@@ -129,7 +129,7 @@ describe('scan', () => {
   it('trusts .cmd shims without probing them', async () => {
     const { ctx, home, cleanup } = await createTempHome({ platform: 'win32' })
     try {
-      await makeFile(join(home, 'bin', 'claude.cmd'))
+      await makeFile(join(home, 'bin', 'claude.CMD'))
       await makeFile(join(home, '.claude', 'settings.json'))
       const probe = vi.fn(async () => false)
 

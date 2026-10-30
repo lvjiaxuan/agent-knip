@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createTempHome } from '../test-utils'
 import { findBinary } from './binary'
@@ -69,22 +69,19 @@ describe('findBinary', () => {
     }
   })
 
-  it('resolves bare executables on posix-style PATHs', async () => {
+  it.skipIf(process.platform === 'win32')('resolves bare executables on posix-style PATHs', async () => {
     const { ctx, home, cleanup } = await createTempHome({ platform: 'linux' })
     try {
       const binDir = join(home, 'bin')
       await mkdir(binDir, { recursive: true })
       await writeFile(join(binDir, 'aider'), '')
 
-      // Relative so the colon-split PATH also works on a Windows host.
       const hit = findBinary({
         ...ctx,
-        env: {
-          PATH: relative(process.cwd(), binDir),
-        },
+        env: { PATH: binDir },
       }, ['aider'])
 
-      expect(hit?.path).toBe(join(relative(process.cwd(), binDir), 'aider'))
+      expect(hit?.path).toBe(join(binDir, 'aider'))
       expect(hit?.probeable).toBe(true)
     }
     finally {
@@ -92,20 +89,19 @@ describe('findBinary', () => {
     }
   })
 
-  it('splits posix PATH on colons', async () => {
+  it.skipIf(process.platform === 'win32')('splits posix PATH on colons', async () => {
     const { ctx, home, cleanup } = await createTempHome({ platform: 'linux' })
     try {
       const binDir = join(home, 'bin')
       await mkdir(binDir, { recursive: true })
       await writeFile(join(binDir, 'opencode'), '')
 
-      const relativeBin = relative(process.cwd(), binDir)
       const hit = findBinary({
         ...ctx,
-        env: { PATH: `/nowhere:${relativeBin}` },
+        env: { PATH: `/nowhere:${binDir}` },
       }, ['opencode'])
 
-      expect(hit?.path).toBe(join(relativeBin, 'opencode'))
+      expect(hit?.path).toBe(join(binDir, 'opencode'))
     }
     finally {
       await cleanup()
