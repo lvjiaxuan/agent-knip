@@ -1,0 +1,72 @@
+{
+  "name": "agent-knip",
+  "type": "module",
+  "version": "0.1.0",
+  "packageManager": "pnpm@12.16.1",
+  "description": "Find and trim leftover config directories of AI coding agents you no longer use",
+  "author": "agent-knip contributors",
+  "license": "MIT",
+  "homepage": "https://github.com/lvjiaxuan/agent-knip",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lvjiaxuan/agent-knip.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lvjiaxuan/agent-knip/issues"
+  },
+  "keywords": [
+    "cli",
+    "cleanup",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "cursor",
+    "gemini-cli"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "bin": {
+    "agent-knip": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsx src/cli.ts",
+    "lint": "eslint --cache",
+    "typecheck": "tsc",
+    "knip": "knip",
+    "test": "pnpm run build && vitest",
+    "ci": "pnpm run lint && pnpm run typecheck && pnpm run knip && pnpm run test --run"
+  },
+  "nano-staged": {
+    "*.{js,ts,tsx,json,css,md,yaml}": "eslint --fix --no-warn-ignored"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:cli",
+    "@types/node": "catalog:cli",
+    "eslint": "catalog:cli",
+    "eslint-plugin-slop": "catalog:cli",
+    "eslint-plugin-sonarjs": "catalog:cli",
+    "knip": "catalog:cli",
+    "nano-staged": "catalog:cli",
+    "simple-git-hooks": "catalog:cli",
+    "tsdown": "catalog:cli",
+    "tsx": "catalog:cli",
+    "typescript": "catalog:cli",
+    "vitest": "catalog:testing"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm i --frozen-lockfile --ignore-scripts --offline && pnpm run ci && pnpx nano-staged"
+  }
+}
