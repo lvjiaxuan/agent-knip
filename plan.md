@@ -293,13 +293,13 @@ agent-knip -v | --version
 
 | 文件 | 覆盖点 |
 | --- | --- |
-| `detect/binary.test.ts` | 临时 PATH、`PATHEXT` 补全、`.cmd` 跳过探测、路径含空格 |
-| `detect/packages.test.ts` | npm 全局目录解析、包名归一化（`@scope/name` → `name`） |
-| `scan.test.ts` | 三态判定、条件探测（有包记录时不 spawn）、`Ctx` 注入 |
-| `fs.test.ts` | 尺寸统计、超时降级为 `sizeComplete: false`、junction 识别 |
-| `prune.test.ts` | 隔离往返、凭据跳过、7 天窗口、symlink 跳过、目标冲突 |
-| `restore.test.ts` | 正常还原、目标被占用时拒绝、manifest 缺失时报错 |
-| `format.test.ts` | 人类输出快照（顺序稳定、不含绝对路径以外的机器信息）、JSON schema |
+| `tests/binary.test.ts` | 临时 PATH、`PATHEXT` 补全、`.cmd` 跳过探测、路径含空格 |
+| `tests/packages.test.ts` | npm 全局目录解析、包名归一化（`@scope/name` → `name`） |
+| `tests/scan.test.ts` | 三态判定、条件探测（有包记录时不 spawn）、`Ctx` 注入 |
+| `tests/fs.test.ts` | 尺寸统计、超时降级为 `sizeComplete: false`、junction 识别 |
+| `tests/prune.test.ts` | 隔离往返、凭据跳过、7 天窗口、symlink 跳过、目标冲突 |
+| `tests/restore.test.ts` | 正常还原、目标被占用时拒绝、manifest 缺失时报错 |
+| `tests/format.test.ts` | 人类输出快照（顺序稳定、不含绝对路径以外的机器信息）、JSON schema |
 
 额外要求：
 
