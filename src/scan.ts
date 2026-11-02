@@ -1,7 +1,7 @@
-import type { AgentReport, AgentSpec, Ctx, PathReport, PathSpec, ProbeFn, ScanOptions } from './types'
-import { join } from 'node:path'
+import type { AgentReport, AgentSpec, Ctx, PathReport, ProbeFn, ScanOptions } from './types'
 import { agents } from './agents'
 import { RECENT_WINDOW_MS, SIZE_BUDGET_MS, WEIGHT } from './constants'
+import { resolveAgentPath } from './context'
 import { findBinary } from './detect/binary'
 import { findPackageRecord } from './detect/packages'
 import { probeBinary } from './detect/probe'
@@ -56,12 +56,19 @@ async function collectPaths(ctx: Ctx, spec: AgentSpec): Promise<PathReport[]> {
   const paths: PathReport[] = []
 
   for (const specPath of spec.paths) {
-    const measured = await measurePath(toAbsolute(ctx, specPath), deadline)
+    const absolute = resolveAgentPath(ctx, specPath)
+    if (!absolute) {
+      continue
+    }
+    const measured = await measurePath(absolute, deadline)
     if (!measured.exists) {
       continue
     }
     paths.push({
       path: specPath.path,
+      ...(specPath.base
+        ? { base: specPath.base }
+        : {}),
       type: specPath.type,
       kind: specPath.kind,
       bytes: measured.bytes,
@@ -155,10 +162,6 @@ export function pruneBlockReason(
   if (!forceRecent && now - path.modifiedAt < RECENT_WINDOW_MS) {
     return 'recent'
   }
-}
-
-function toAbsolute(ctx: Ctx, spec: PathSpec): string {
-  return join(ctx.home, ...spec.path.split('/'))
 }
 
 function findApp(ctx: Ctx, spec: AgentSpec): string | undefined {

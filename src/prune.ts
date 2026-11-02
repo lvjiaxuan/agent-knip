@@ -2,8 +2,14 @@ import type { AgentReport, Ctx, Manifest, ManifestItem, PathReport, PruneOptions
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { SCHEMA_VERSION, TRASH_DIR, TRASH_SUBDIR } from './constants'
+import { resolveAgentPath } from './context'
 import { errorCode, movePath, pathExists } from './fs'
 import { pruneBlockReason, scan } from './scan'
+
+interface Candidate {
+  report: AgentReport
+  path: PathReport
+}
 
 /** `2026-10-30T08-40-12Z`: sortable, no colons (Windows-safe). */
 function trashStamp(now: number): string {
@@ -22,34 +28,59 @@ export async function prune(ctx: Ctx, options: PruneOptions = {}): Promise<Prune
   const reports = await scan(ctx, { agent: options.agent })
   const root = join(trashRoot(ctx), trashStamp(ctx.now))
   const skipped: Skip[] = []
-  const candidates: { report: AgentReport, path: PathReport }[] = []
-
-  for (const report of reports) {
-    for (const path of report.paths) {
-      const reason = pruneBlockReason(report.state, path, ctx.now, options.forceRecent)
-      if (reason) {
-        skipped.push({ id: report.agent.id, path: path.path, reason })
-      }
-      else {
-        candidates.push({ report, path })
-      }
-    }
-  }
+  const candidates = collectCandidates(reports, ctx.now, options.forceRecent, skipped)
 
   if (candidates.length === 0) {
     return { moved: [], skipped }
   }
 
   await mkdir(root, { recursive: true })
+  const moved = await moveCandidates(ctx, root, candidates, skipped)
+
+  if (moved.length === 0) {
+    await rm(root, { recursive: true, force: true })
+    return { moved, skipped }
+  }
+
+  const manifest: Manifest = { version: SCHEMA_VERSION, createdAt: ctx.now, items: moved }
+  await writeFile(join(root, 'manifest.json'), JSON.stringify(manifest, null, 2))
+  return { trashDir: root, moved, skipped }
+}
+
+function collectCandidates(
+  reports: AgentReport[],
+  now: number,
+  forceRecent: boolean | undefined,
+  skipped: Skip[],
+): Candidate[] {
+  const candidates: Candidate[] = []
+  for (const report of reports) {
+    for (const path of report.paths) {
+      const reason = pruneBlockReason(report.state, path, now, forceRecent)
+      if (reason) {
+        skipped.push(skipOf(report, path, reason))
+      }
+      else {
+        candidates.push({ report, path })
+      }
+    }
+  }
+  return candidates
+}
+
+async function moveCandidates(ctx: Ctx, root: string, candidates: Candidate[], skipped: Skip[]): Promise<ManifestItem[]> {
   const moved: ManifestItem[] = []
-
   for (const { report, path } of candidates) {
-    const to = `${report.agent.id}/${path.path}`
+    const to = trashPath(report, path)
     const target = join(root, ...to.split('/'))
-    const from = join(ctx.home, ...path.path.split('/'))
+    const from = resolveAgentPath(ctx, path)
 
+    if (!from) {
+      skipped.push(skipOf(report, path, 'path base unavailable'))
+      continue
+    }
     if (await pathExists(target)) {
-      skipped.push({ id: report.agent.id, path: path.path, reason: 'already in trash' })
+      skipped.push(skipOf(report, path, 'already in trash'))
       continue
     }
 
@@ -65,16 +96,25 @@ export async function prune(ctx: Ctx, options: PruneOptions = {}): Promise<Prune
       })
     }
     catch (error) {
-      skipped.push({ id: report.agent.id, path: path.path, reason: `move failed: ${errorCode(error)}` })
+      skipped.push(skipOf(report, path, `move failed: ${errorCode(error)}`))
     }
   }
+  return moved
+}
 
-  if (moved.length === 0) {
-    await rm(root, { recursive: true, force: true })
-    return { moved, skipped }
+function skipOf(report: AgentReport, path: PathReport, reason: string): Skip {
+  return {
+    id: report.agent.id,
+    path: path.path,
+    ...(path.base
+      ? { base: path.base }
+      : {}),
+    reason,
   }
+}
 
-  const manifest: Manifest = { version: SCHEMA_VERSION, createdAt: ctx.now, items: moved }
-  await writeFile(join(root, 'manifest.json'), JSON.stringify(manifest, null, 2))
-  return { trashDir: root, moved, skipped }
+function trashPath(report: AgentReport, path: PathReport): string {
+  return path.base
+    ? `${report.agent.id}/${path.base}/${path.path}`
+    : `${report.agent.id}/${path.path}`
 }

@@ -46,6 +46,7 @@
     "lint": "eslint --cache",
     "typecheck": "tsc",
     "knip": "knip",
+    "gen:agents": "node scripts/sync-agents.mjs",
     "test": "pnpm run build && vitest",
     "ci": "pnpm run lint && pnpm run typecheck && pnpm run knip && pnpm run test --run"
   },
@@ -61,6 +62,7 @@
     "knip": "catalog:cli",
     "nano-staged": "catalog:cli",
     "simple-git-hooks": "catalog:cli",
+    "skills": "catalog:cli",
     "tsdown": "catalog:cli",
     "tsx": "catalog:cli",
     "typescript": "catalog:cli",

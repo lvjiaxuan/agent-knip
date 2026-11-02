@@ -1,0 +1,181 @@
+#!/usr/bin/env node
+/**
+ * Regenerates `src/agents.generated.ts` from the installed `skills` package.
+ *
+ * Why a script and not an import: `skills` ships as a CLI bundle with no
+ * entry point (`export {}`, no `main`, no `exports`) and importing its dist
+ * runs main() and exits the process. Its agent table is module-local, so the
+ * only way in is to read the bundle.
+ *
+ * shortcut: textual extraction from dist/cli.mjs, breaks when upstream changes
+ * its build layout. Regenerate with `pnpm gen:agents` and re-check the diff.
+ */
+import { readFileSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import process from 'node:process'
+
+const require = createRequire(import.meta.url)
+const cliPath = require.resolve('skills/dist/cli.mjs')
+const source = readFileSync(cliPath, 'utf8')
+
+/** Home-relative dirs for entries that read an env override or a helper. */
+const OVERRIDES = {
+  'autohand-code': ['.autohand'],
+  'claude-code': ['.claude'],
+  'codex': ['.codex'],
+  'grok': ['.grok'],
+  'hermes-agent': ['.hermes'],
+  'kimchi': ['.config/kimchi'],
+  'kimi-code-cli': ['.kimi-code', '.kimi'],
+  'kilo': ['.kilo', '.kilocode'],
+  'minimax-code': ['.minimax'],
+  'mistral-vibe': ['.vibe'],
+  'openclaw': ['.openclaw', '.clawdbot', '.moltbot'],
+  'posit-assistant': ['.posit/assistant', '.positai'],
+  'sarvam-code': ['.sarvam'],
+  'zcode': ['.zcode'],
+}
+
+/** Absolute install locations, kept out of `paths`. */
+const APPS = {
+  'minimax-code': {
+    darwin: ['/Applications/MiniMax Code.app'],
+  },
+  'zcode': {
+    darwin: ['/Applications/ZCode.app'],
+  },
+}
+
+/** Agents whose detection lives in `process.cwd()` only, so they cannot be expressed. */
+const UNEXPRESSIBLE = new Set([
+  'eve',
+  'promptscript',
+  'replit',
+  'universal',
+])
+
+/** Already in `src/agents.ts` with verified install evidence. */
+const ALREADY_LISTED = new Set([
+  'claude-code',
+  'codex',
+  'cursor',
+  'gemini-cli',
+  'opencode',
+  'zed',
+])
+
+/** Module-level `const`, evaluated from the real home at import time upstream. */
+const HOME_VARS = {
+  autohandHome: '.autohand',
+  claudeHome: '.claude',
+  codexHome: '.codex',
+  grokHome: '.grok',
+  hermesHome: '.hermes',
+  sarvamHome: '.sarvam',
+  vibeHome: '.vibe',
+}
+
+const tableStart = source.indexOf('const agents = {')
+const tableEnd = source.indexOf('\n};', tableStart)
+if (tableStart === -1 || tableEnd === -1) {
+  throw new Error('agents table not found in skills/dist/cli.mjs; upstream layout changed')
+}
+
+const table = source.slice(tableStart, tableEnd)
+const entries = [
+  ...table.matchAll(/\n\t(?:"([\w-]+)"|(\w+)): \{\n([\s\S]*?)\n\t\},/g),
+]
+if (entries.length < 50) {
+  throw new Error(`expected 50+ agents in the table, parsed ${entries.length}; upstream layout changed`)
+}
+
+const quote = text => `'${text.replace(/'/g, '\\\'')}'`
+
+function homePaths(body) {
+  const out = []
+  for (const call of body.matchAll(/join\((home|configHome|autohandHome|claudeHome|codexHome|grokHome|hermesHome|sarvamHome|vibeHome)((?:, ?(?:"[^"]*"|'[^']*'))*)\)/g)) {
+    const [, base, rest] = call
+    const segments = [
+      ...rest.matchAll(/"([^"]*)"|'([^']*)'/g),
+    ].map(match => match[1] ?? match[2])
+    if (base === 'home') {
+      out.push(segments.join('/'))
+    }
+    else if (base === 'configHome') {
+      out.push(['.config', ...segments].join('/'))
+    }
+    else {
+      out.push([HOME_VARS[base], ...segments].join('/'))
+    }
+  }
+  // `existsSync(someHome)` with no join.
+  for (const [variable, dir] of Object.entries(HOME_VARS)) {
+    if (body.includes(`existsSync(${variable})`)) {
+      out.push(dir)
+    }
+  }
+  return out
+}
+
+const rows = []
+for (const [, quoted, bare, body] of entries) {
+  const id = quoted ?? bare
+  if (UNEXPRESSIBLE.has(id) || ALREADY_LISTED.has(id)) {
+    continue
+  }
+  const name = body.match(/displayName: "([^"]+)"/)?.[1] ?? id
+  // Only what detection looks at: `globalSkillsDir` names a different directory.
+  const detect = body.slice(body.indexOf('detectInstalled:'))
+  const paths = [
+    ...homePaths(detect),
+    ...(OVERRIDES[id] ?? []),
+  ]
+  const unique = [
+    ...new Set(paths),
+  ].filter(Boolean)
+  if (unique.length === 0) {
+    throw new Error(`no home-relative path found for ${id}; add it to OVERRIDES`)
+  }
+  rows.push({
+    id,
+    name,
+    paths: unique,
+    apps: APPS[id],
+  })
+}
+
+rows.sort((a, b) => a.id.localeCompare(b.id))
+
+const blocks = rows.map((row) => {
+  const lines = [
+    `  {`,
+    `    id: ${quote(row.id)},`,
+    `    name: ${quote(row.name)},`,
+    `    paths: [`,
+  ]
+  for (const path of row.paths) {
+    lines.push(`      { path: ${quote(path)}, type: 'dir', kind: 'config' },`)
+  }
+  lines.push(`    ],`)
+  if (row.apps) {
+    lines.push(`    apps: {`)
+    for (const [platform, locations] of Object.entries(row.apps)) {
+      lines.push(`      ${platform}: [${locations.map(quote).join(', ')}],`)
+    }
+    lines.push(`    },`)
+  }
+  lines.push(`  },`)
+  return lines.join('\n')
+})
+
+const file = `// Generated by scripts/sync-agents.mjs from the \`skills\` package. Do not edit.
+// Config dirs only: no install evidence, so these stay at \`configured\`.
+import type { AgentSpec } from './types'
+
+export const importedAgents: AgentSpec[] = [
+${blocks.join('\n')}
+]
+`
+
+writeFileSync(new URL('../src/agents.generated.ts', import.meta.url), file, 'utf8')
+process.stdout.write(`generated ${rows.length} agents from ${cliPath}\n`)

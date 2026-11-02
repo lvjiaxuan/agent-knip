@@ -15,7 +15,7 @@ const UNPROBEABLE = new Set(['.cmd', '.bat', '.ps1'])
  * Resolve a command on PATH without spawning anything. On Windows the
  * extensions from PATHEXT are appended; commands are never run here.
  */
-export function findBinary(ctx: Ctx, bins: string[]): BinaryHit | undefined {
+export function findBinary(ctx: Ctx, bins: string[] = []): BinaryHit | undefined {
   const dirs = searchDirs(ctx)
   const extensions = candidateExtensions(ctx)
 

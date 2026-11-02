@@ -51,6 +51,16 @@ export function formatBytes(bytes: number): string {
   return `${Number.parseFloat(value.toFixed(digits))} ${units[unit]}`
 }
 
+export function formatPath(path: Pick<PathReport, 'path' | 'base'>): string {
+  if (!path.base) {
+    return `~/${path.path}`
+  }
+  const prefix = path.base === 'APPDATA' || path.base === 'LOCALAPPDATA'
+    ? `%${path.base}%`
+    : `$${path.base}`
+  return `${prefix}/${path.path}`
+}
+
 export function formatAge(modifiedAt: number, now: number): string {
   if (!modifiedAt) {
     return '-'
@@ -77,7 +87,7 @@ export function formatReport(reports: AgentReport[], options: FormatOptions): st
   }
 
   const totalBytes = reports.reduce((sum, report) => sum + report.bytes, 0)
-  const pathWidth = Math.max(16, ...reports.flatMap(report => report.paths.map(path => `~/${path.path}`.length)))
+  const pathWidth = Math.max(16, ...reports.flatMap(report => report.paths.map(path => formatPath(path).length)))
   const agentWidth = Math.max(COLUMNS.agent.length, ...reports.map(report => report.agent.name.length))
   const lines = [`  ${paint('bold', 'agent-knip')} ${paint('dim', `· ${count} agent${count === 1
     ? ''
@@ -99,9 +109,10 @@ export function formatReport(reports: AgentReport[], options: FormatOptions): st
   }
 
   lines.push('')
-  const reclaimable = reclaimableBytes(reports, now)
-  if (reclaimable > 0) {
-    lines.push(`  ${formatBytes(reclaimable)} can be reclaimed. Nothing has been changed.`)
+  const reclaimable = reclaimablePaths(reports, now)
+  if (reclaimable.length > 0) {
+    const bytes = reclaimable.reduce((sum, path) => sum + path.bytes, 0)
+    lines.push(`  ${formatBytes(bytes)} can be reclaimed. Nothing has been changed.`)
     lines.push('  Run `agent-knip prune` to move them to ~/.agent-knip/trash.')
   }
   else {
@@ -127,18 +138,16 @@ function renderGroup(members: AgentReport[], now: number, pathWidth: number, age
   const lines: string[] = []
   for (const report of members) {
     for (const path of report.paths) {
-      lines.push(`  ${`~/${path.path}`.padEnd(pathWidth)}  ${formatBytes(path.bytes).padStart(8)}  ${formatAge(path.modifiedAt, now).padStart(8)}  ${report.agent.name.padEnd(agentWidth)}  ${pathResult(report, path, now)}`)
+      lines.push(`  ${formatPath(path).padEnd(pathWidth)}  ${formatBytes(path.bytes).padStart(8)}  ${formatAge(path.modifiedAt, now).padStart(8)}  ${report.agent.name.padEnd(agentWidth)}  ${pathResult(report, path, now)}`)
     }
   }
   return lines
 }
 
-function reclaimableBytes(reports: AgentReport[], now: number): number {
+function reclaimablePaths(reports: AgentReport[], now: number): PathReport[] {
   return reports
     .filter(report => report.state === 'configured')
-    .reduce((sum, report) => sum + report.paths
-      .filter(path => !pruneBlockReason(report.state, path, now))
-      .reduce((inner, path) => inner + path.bytes, 0), 0)
+    .flatMap(report => report.paths.filter(path => !pruneBlockReason(report.state, path, now)))
 }
 
 function pathResult(report: AgentReport, path: PathReport, now: number): string {

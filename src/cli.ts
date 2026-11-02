@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util'
 import { agents } from './agents'
 import { STALE_TRASH_MS, VERSION } from './constants'
 import { createContext } from './context'
-import { formatBytes, formatJson, formatReport } from './format'
+import { formatBytes, formatJson, formatPath, formatReport } from './format'
 import { prune, trashRoot } from './prune'
 import { listTrash, restore } from './restore'
 import { pruneBlockReason, scan } from './scan'
@@ -269,7 +269,7 @@ function printPruneResult(result: PruneResult, ctx: Ctx): void {
   out('')
   out('  Skipped:')
   for (const skip of result.skipped) {
-    out(`    ${`~/${skip.path}`.padEnd(24)} ${skip.reason}`)
+    out(`    ${formatPath(skip).padEnd(24)} ${skip.reason}`)
   }
 }
 

@@ -151,4 +151,52 @@ describe('scan', () => {
       await cleanup()
     }
   })
+
+  it('resolves %APPDATA% based paths on win32', async () => {
+    const { ctx, home, cleanup } = await createTempHome({ platform: 'win32' })
+    try {
+      const appdata = join(home, 'AppData', 'Roaming')
+      await makeFile(join(appdata, 'Zed', 'settings.json'), '{}')
+      await makeFile(join(home, 'bin', 'zed.exe'))
+
+      const reports = await scan(
+        {
+          ...ctx,
+          env: {
+            APPDATA: appdata,
+            PATH: join(home, 'bin'),
+            PATHEXT: '.EXE',
+          },
+        },
+        {
+          probe: async () => true,
+        },
+      )
+
+      const zed = reports.find(report => report.agent.id === 'zed')
+      expect(zed?.paths).toHaveLength(1)
+      expect(zed?.paths[0].base).toBe('APPDATA')
+      expect(zed?.state).toBe('installed')
+      expect(zed?.evidence.some(line => line.startsWith('bin:'))).toBe(true)
+    }
+    finally {
+      await cleanup()
+    }
+  })
+
+  it('falls back to ~/.config for XDG_CONFIG_HOME paths', async () => {
+    const { ctx, home, cleanup } = await createTempHome({ platform: 'linux' })
+    try {
+      await makeFile(join(home, '.config', 'zed', 'settings.json'), '{}')
+
+      const reports = await scan(ctx)
+
+      const zed = reports.find(report => report.agent.id === 'zed')
+      expect(zed?.paths[0].base).toBe('XDG_CONFIG_HOME')
+      expect(zed?.state).toBe('configured')
+    }
+    finally {
+      await cleanup()
+    }
+  })
 })

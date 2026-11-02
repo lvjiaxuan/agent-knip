@@ -1,6 +1,7 @@
 export type DirKind = 'config' | 'history' | 'cache' | 'credentials'
 export type State = 'installed' | 'configured' | 'unknown'
 export type ProbeFn = (bin: string) => Promise<boolean>
+export type PathBase = 'APPDATA' | 'LOCALAPPDATA' | 'XDG_CONFIG_HOME' | 'FLATPAK_XDG_CONFIG_HOME'
 
 export interface Ctx {
   home: string
@@ -10,8 +11,9 @@ export interface Ctx {
 }
 
 export interface PathSpec {
-  /** Path relative to home, always `/`-separated. */
+  /** Path relative to home, or to `base` when set; always `/`-separated. */
   path: string
+  base?: PathBase
   type: 'dir' | 'file'
   kind: DirKind
 }
@@ -19,7 +21,8 @@ export interface PathSpec {
 export interface AgentSpec {
   id: string
   name: string
-  bins: string[]
+  /** Commands to resolve on PATH; absent when only the config dir is known. */
+  bins?: string[]
   /** npm package names, compared against global node_modules. */
   packages?: string[]
   /** pipx venv names. */
@@ -31,6 +34,7 @@ export interface AgentSpec {
 
 export interface PathReport {
   path: string
+  base?: PathBase
   type: 'dir' | 'file'
   kind: DirKind
   bytes: number
@@ -88,6 +92,7 @@ export interface TrashEntry {
 export interface Skip {
   id: string
   path: string
+  base?: PathBase
   reason: string
 }
 

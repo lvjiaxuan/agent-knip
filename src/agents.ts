@@ -1,11 +1,14 @@
 import type { AgentSpec } from './types'
+import { importedAgents } from './agents.generated'
 
 /**
- * The whole registry. Discovery is limited to these paths on purpose:
- * no scanning of home, no guessing.
+ * Discovery is limited to the paths below on purpose: no scanning of home, no
+ * guessing.
  *
- * Every path below was checked on a real Windows home (`ls ~`); entries that
- * could not be verified on a machine are marked as such.
+ * The entries here were checked on a real home and carry install evidence
+ * (bins / packages / apps). `importedAgents` is generated from the `skills`
+ * package and only knows config directories, so those can never reach
+ * `installed`; they lean on the recent-mtime guard instead.
  */
 export const agents: AgentSpec[] = [
   {
@@ -71,4 +74,44 @@ export const agents: AgentSpec[] = [
       { path: '.local/share/opencode', type: 'dir', kind: 'history' },
     ],
   },
+  {
+    id: 'zed',
+    name: 'Zed',
+    bins: ['zed'],
+    paths: [
+      {
+        path: 'zed',
+        base: 'XDG_CONFIG_HOME',
+        type: 'dir',
+        kind: 'config',
+      },
+      {
+        path: 'Zed',
+        base: 'APPDATA',
+        type: 'dir',
+        kind: 'config',
+      },
+      {
+        path: 'Zed',
+        base: 'LOCALAPPDATA',
+        type: 'dir',
+        kind: 'cache',
+      },
+      {
+        path: 'zed',
+        base: 'FLATPAK_XDG_CONFIG_HOME',
+        type: 'dir',
+        kind: 'config',
+      },
+    ],
+    apps: {
+      win32: [
+        '%LOCALAPPDATA%/Programs/Zed',
+        '%ProgramFiles%/Zed',
+        '%ProgramFiles(x86)%/Zed',
+      ],
+      darwin: ['/Applications/Zed.app'],
+    },
+  },
+  ...importedAgents,
 ]

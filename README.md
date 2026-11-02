@@ -95,7 +95,7 @@ npx agent-knip restore --all    # 全部放回原位
 
 - 检测基于本地痕迹，便携版、WSL 内安装、多机同步的配置会被判成 `installed`（偏保守，不会误删）
 - 隔离区不会自动清理，需要你手动删 `~/.agent-knip`
-- 0.1 的 agent 登记表只覆盖常见几个，其余靠 PR 补充
+- 除手写登记的 agent 外，生成表里的 69 个 agent 来自 `skills` 包，只有配置目录、没有安装证据，最多只能到 `configured`，判定靠"目录最近没被改动"兜底
 - SSD 上没有"彻底擦除"这回事，本工具也不假装提供
 
 ## 和 knip 的关系
@@ -104,7 +104,9 @@ npx agent-knip restore --all    # 全部放回原位
 
 ## 添加一个 agent
 
-在 `src/agents.ts` 里加一条记录，跑 `pnpm test`。收录标准只有一条：**路径在 Windows 和 macOS 上实机确认过**，猜的不收。
+在 `src/agents.ts` 里加一条记录，跑 `pnpm test`。收录标准：**路径在 Windows 和 macOS 上实机确认过**，猜的不收。
+
+`src/agents.generated.ts` 不手写，由 `pnpm gen:agents` 从 `skills` 包重新生成——那 69 条只有配置目录，没有 bin/包记录，所以它们永远停在 `configured`。Zed 因为 Windows、XDG 和 Flatpak 的配置路径不同，单独在 `src/agents.ts` 维护。想把生成条目升级成 `installed` 级别，得在 `src/agents.ts` 里补 `bins` 或 `packages` 并实机确认。
 
 ## License
 

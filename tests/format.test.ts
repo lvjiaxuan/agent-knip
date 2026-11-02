@@ -1,6 +1,6 @@
 import type { AgentReport, AgentSpec, PathReport } from '../src/types'
 import { describe, expect, it } from 'vitest'
-import { formatAge, formatBytes, formatJson, formatReport } from '../src/format'
+import { formatAge, formatBytes, formatJson, formatPath, formatReport } from '../src/format'
 
 const now = 1_793_000_000_000
 const DAY = 24 * 60 * 60 * 1000
@@ -118,6 +118,20 @@ describe('formatReport', () => {
     expect(output).not.toContain('/home/')
   })
 
+  it('still reports reclaimable when a prunable path is empty', () => {
+    const output = formatReport([
+      report(claude, {
+        paths: [
+          path({ path: '.claude', bytes: 0, modifiedAt: now - 30 * DAY }),
+        ],
+        bytes: 0,
+      }),
+    ], { now })
+
+    expect(output).toContain('prunable')
+    expect(output).toContain('0 B can be reclaimed.')
+  })
+
   it('says nothing to reclaim when every unused path is blocked', () => {
     const output = formatReport([
       report(claude, {
@@ -169,5 +183,13 @@ describe('formatAge', () => {
     expect(formatAge(now - 1000, now)).toBe('today')
     expect(formatAge(now - 18 * DAY, now)).toBe('18d ago')
     expect(formatAge(now - 60 * DAY, now)).toBe('2mo ago')
+  })
+})
+
+describe('formatPath', () => {
+  it('shows home-relative paths with ~ and env-based paths with their variable', () => {
+    expect(formatPath({ path: '.claude' })).toBe('~/.claude')
+    expect(formatPath({ path: 'Zed', base: 'APPDATA' })).toBe('%APPDATA%/Zed')
+    expect(formatPath({ path: 'zed', base: 'XDG_CONFIG_HOME' })).toBe('$XDG_CONFIG_HOME/zed')
   })
 })

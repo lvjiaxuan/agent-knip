@@ -100,6 +100,35 @@ describe('prune', () => {
     expect(await pathExists(join(home, '.gemini'))).toBe(false)
   })
 
+  it('prunes and restores an environment-based path', async () => {
+    temp = await createTempHome({ platform: 'win32' })
+    const { ctx, home } = temp
+    const appdata = join(home, 'AppData', 'Roaming')
+    await mkdir(join(appdata, 'Zed'), { recursive: true })
+    await writeFile(join(appdata, 'Zed', 'settings.json'), '{"theme":"dark"}')
+    await age(join(appdata, 'Zed', 'settings.json'), 30)
+    await age(join(appdata, 'Zed'), 30)
+
+    const result = await prune({
+      ...ctx,
+      env: { APPDATA: appdata },
+      now: Date.now(),
+    })
+
+    expect(result.moved).toHaveLength(1)
+    expect(result.moved[0].from).toBe(join(appdata, 'Zed'))
+    expect(result.moved[0].to).toBe('zed/APPDATA/Zed')
+    expect(await pathExists(join(appdata, 'Zed'))).toBe(false)
+
+    const restored = await restore({
+      ...ctx,
+      env: { APPDATA: appdata },
+    })
+
+    expect(restored.restored).toHaveLength(1)
+    expect(await readFile(join(appdata, 'Zed', 'settings.json'), 'utf8')).toBe('{"theme":"dark"}')
+  })
+
   it('never moves symlinks or junctions', async () => {
     temp = await createTempHome({ platform: 'win32' })
     const { ctx, home } = temp
