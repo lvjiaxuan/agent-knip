@@ -4,7 +4,7 @@ export default antfu({
   type: 'lib',
   pnpm: true,
   antislop: true,
-  // plan.md / README.md are prose specs, not lint targets.
+  // README.md is prose, not a lint target.
   markdown: false,
   ignores: ['**/*.md'],
 })
