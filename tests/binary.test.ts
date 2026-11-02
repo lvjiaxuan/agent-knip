@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createTempHome } from '../test-utils'
-import { findBinary } from './binary'
+import { findBinary } from '../src/detect/binary'
+import { createTempHome } from './test-utils'
 
 describe('findBinary', () => {
   it('appends PATHEXT entries on win32 and strips quotes from PATH', async () => {

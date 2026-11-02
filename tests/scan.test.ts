@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { scan } from './scan'
+import { scan } from '../src/scan'
 import { createTempHome } from './test-utils'
 
 async function makeFile(path: string, content = 'x'): Promise<void> {

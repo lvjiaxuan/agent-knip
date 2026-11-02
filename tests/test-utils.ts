@@ -1,4 +1,4 @@
-import type { Ctx } from './types'
+import type { Ctx } from '../src/types'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

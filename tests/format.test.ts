@@ -1,6 +1,6 @@
-import type { AgentReport, AgentSpec, PathReport } from './types'
+import type { AgentReport, AgentSpec, PathReport } from '../src/types'
 import { describe, expect, it } from 'vitest'
-import { formatAge, formatBytes, formatJson, formatReport } from './format'
+import { formatAge, formatBytes, formatJson, formatReport } from '../src/format'
 
 const now = 1_793_000_000_000
 const DAY = 24 * 60 * 60 * 1000

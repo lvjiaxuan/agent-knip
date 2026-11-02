@@ -1,7 +1,7 @@
 import { mkdir, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { measurePath } from './fs'
+import { measurePath } from '../src/fs'
 import { createTempHome } from './test-utils'
 
 describe('measurePath', () => {

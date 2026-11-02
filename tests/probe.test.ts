@@ -2,7 +2,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { describe, expect, it } from 'vitest'
-import { probeBinary } from './probe'
+import { probeBinary } from '../src/detect/probe'
 
 describe('probeBinary', () => {
   it('reports a live binary', async () => {

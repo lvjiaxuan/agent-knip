@@ -84,7 +84,7 @@ agent-knip/
     └── format.ts              # 人话表格 / JSON
 ```
 
-测试文件与被测文件同目录（`fs.ts` → `fs.test.ts`），遵循 antfu/skills 的约定，而不是模板里的 `test/` 目录。
+测试文件统一放在根目录 `tests/`，通过 `../src/...` 引用被测实现。
 
 所有模块接收显式上下文 `Ctx`，不直接读 `process.env` / `os.homedir()`：
 

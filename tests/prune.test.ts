@@ -2,9 +2,9 @@ import type { TempHome } from './test-utils'
 import { mkdir, readFile, symlink, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { pathExists } from './fs'
-import { prune } from './prune'
-import { listTrash, restore } from './restore'
+import { pathExists } from '../src/fs'
+import { prune } from '../src/prune'
+import { listTrash, restore } from '../src/restore'
 import { createTempHome } from './test-utils'
 
 const DAY = 24 * 60 * 60 * 1000

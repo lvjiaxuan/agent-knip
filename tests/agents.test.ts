@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agents } from './agents'
+import { agents } from '../src/agents'
 
 const KINDS = new Set([
   'config',

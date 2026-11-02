@@ -1,9 +1,9 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { agents } from '../agents'
-import { createTempHome } from '../test-utils'
-import { findPackageRecord } from './packages'
+import { agents } from '../src/agents'
+import { findPackageRecord } from '../src/detect/packages'
+import { createTempHome } from './test-utils'
 
 const claude = agents.find(agent => agent.id === 'claude')!
 const aider = agents.find(agent => agent.id === 'aider')!
