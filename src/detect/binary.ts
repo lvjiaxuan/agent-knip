@@ -16,6 +16,9 @@ const UNPROBEABLE = new Set(['.cmd', '.bat', '.ps1'])
  * extensions from PATHEXT are appended; commands are never run here.
  */
 export function findBinary(ctx: Ctx, bins: string[] = []): BinaryHit | undefined {
+  if (bins.length > 0 && ctx.env.PATH === undefined && ctx.env.Path === undefined) {
+    throw new Error('PATH is unavailable; binary detection was not performed')
+  }
   const dirs = searchDirs(ctx)
   const extensions = candidateExtensions(ctx)
 

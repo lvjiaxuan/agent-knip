@@ -1,5 +1,5 @@
 import type { Ctx } from '../src/types'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -12,11 +12,15 @@ export interface TempHome {
 
 /** A throwaway home directory; nothing ever touches the real `~`. */
 export async function createTempHome(overrides: Partial<Ctx> = {}): Promise<TempHome> {
-  const home = await mkdtemp(join(tmpdir(), 'agent-knip-'))
+  const home = await realpath(await mkdtemp(join(tmpdir(), 'agent-knip-')))
   const ctx: Ctx = {
     home,
     platform: process.platform,
-    env: {},
+    env: {
+      PATH: '',
+      APPDATA: join(home, 'AppData', 'Roaming'),
+      LOCALAPPDATA: join(home, 'AppData', 'Local'),
+    },
     now: Date.now(),
     ...overrides,
   }

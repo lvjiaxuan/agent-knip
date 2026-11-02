@@ -9,19 +9,22 @@ const claude: AgentSpec = {
   id: 'claude',
   name: 'Claude Code',
   bins: ['claude'],
-  paths: [],
+  registry: 'curated',
+  locations: [],
 }
 const gemini: AgentSpec = {
   id: 'gemini',
   name: 'Gemini CLI',
   bins: ['gemini'],
-  paths: [],
+  registry: 'curated',
+  locations: [],
 }
 const cursor: AgentSpec = {
   id: 'cursor',
   name: 'Cursor',
   bins: ['cursor-agent'],
-  paths: [],
+  registry: 'curated',
+  locations: [],
 }
 
 function path(overrides: Partial<PathReport> & { path: string }): PathReport {
@@ -42,6 +45,8 @@ function report(agent: AgentSpec, overrides: Partial<AgentReport>): AgentReport 
     state: 'configured',
     score: 0,
     evidence: [],
+    checks: [],
+    cleanupSupported: true,
     paths: [],
     bytes: 0,
     skips: [],
@@ -92,12 +97,12 @@ describe('formatReport', () => {
   it('orders groups Unused → Unknown → In use and marks skipped paths', () => {
     const output = formatReport(reports, { now })
 
-    expect(output.indexOf('Unused (1)')).toBeLessThan(output.indexOf('Unknown (1)'))
-    expect(output.indexOf('Unknown (1)')).toBeLessThan(output.indexOf('In use (1)'))
+    expect(output.indexOf('No install found (1)')).toBeLessThan(output.indexOf('Check yourself (1)'))
+    expect(output.indexOf('Check yourself (1)')).toBeLessThan(output.indexOf('Install found (1)'))
     expect(output).toContain('~/.claude.json')
-    expect(output).toContain('⚠ skipped: credentials')
-    expect(output).toContain('unknown: bin found, --version failed')
-    expect(output).toContain('412 MB can be reclaimed.')
+    expect(output).toContain('kept: credentials')
+    expect(output).toContain('kept: unknown')
+    expect(output).toContain('1 candidate path(s), 412 MB.')
     expect(output).toContain('Nothing has been changed.')
   })
 
@@ -128,8 +133,8 @@ describe('formatReport', () => {
       }),
     ], { now })
 
-    expect(output).toContain('prunable')
-    expect(output).toContain('0 B can be reclaimed.')
+    expect(output).toContain('candidate (confirm)')
+    expect(output).toContain('1 candidate path(s), 0 B.')
   })
 
   it('says nothing to reclaim when every unused path is blocked', () => {
@@ -143,12 +148,12 @@ describe('formatReport', () => {
       }),
     ], { now })
 
-    expect(output).toContain('skipped: recent')
-    expect(output).toContain('Nothing to reclaim.')
+    expect(output).toContain('kept: recent')
+    expect(output).toContain('No cleanup candidates.')
   })
 
   it('handles an empty scan', () => {
-    expect(formatReport([], { now })).toContain('no agent leftovers found')
+    expect(formatReport([], { now })).toContain('no registered agent data or install evidence found')
   })
 })
 
@@ -156,12 +161,13 @@ describe('formatJson', () => {
   it('emits the stable schema with grouped ids', () => {
     const parsed = JSON.parse(formatJson(reports, now))
 
-    expect(parsed.version).toBe(1)
+    expect(parsed.version).toBe(2)
     expect(parsed.scannedAt).toBe(now)
     expect(parsed.groups).toEqual({
-      unused: ['claude'],
-      unknown: ['gemini'],
-      inUse: ['cursor'],
+      noInstallFound: ['claude'],
+      checkYourself: ['gemini'],
+      installFound: ['cursor'],
+      reference: [],
     })
     expect(parsed.agents).toHaveLength(3)
   })

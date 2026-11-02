@@ -20,6 +20,7 @@ describe('scan', () => {
       expect(reports).toHaveLength(1)
       expect(reports[0].state).toBe('configured')
       expect(reports[0].evidence).toEqual([])
+      expect(reports[0].checks.some(check => check.status === 'not-found')).toBe(true)
       expect(reports[0].paths.map(path => path.path)).toEqual(['.claude'])
       expect(reports[0].bytes).toBeGreaterThan(0)
     }
@@ -37,7 +38,7 @@ describe('scan', () => {
 
       const reports = await scan({
         ...ctx,
-        env: { APPDATA: appdata },
+        env: { ...ctx.env, APPDATA: appdata },
       })
 
       expect(reports[0].state).toBe('installed')
@@ -58,6 +59,7 @@ describe('scan', () => {
         {
           ...ctx,
           env: {
+            ...ctx.env,
             PATH: join(home, 'bin'),
           },
         },
@@ -67,7 +69,7 @@ describe('scan', () => {
       )
 
       expect(reports[0].state).toBe('unknown')
-      expect(reports[0].reason).toBe('bin found, --version failed')
+      expect(reports[0].checks.some(check => check.source === 'probe' && check.status === 'error')).toBe(true)
       expect(reports[0].skips).toContain('unknown')
     }
     finally {
@@ -85,6 +87,7 @@ describe('scan', () => {
         {
           ...ctx,
           env: {
+            ...ctx.env,
             PATH: join(home, 'bin'),
           },
         },
@@ -113,6 +116,7 @@ describe('scan', () => {
       await scan({
         ...ctx,
         env: {
+          ...ctx.env,
           APPDATA: appdata,
           PATH: join(home, 'bin'),
           PATHEXT: '.EXE',
@@ -137,6 +141,7 @@ describe('scan', () => {
         {
           ...ctx,
           env: {
+            ...ctx.env,
             PATH: join(home, 'bin'),
             PATHEXT: '.CMD',
           },
@@ -163,7 +168,9 @@ describe('scan', () => {
         {
           ...ctx,
           env: {
+            ...ctx.env,
             APPDATA: appdata,
+            LOCALAPPDATA: join(home, 'AppData', 'Local'),
             PATH: join(home, 'bin'),
             PATHEXT: '.EXE',
           },

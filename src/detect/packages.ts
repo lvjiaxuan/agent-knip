@@ -1,6 +1,7 @@
 import type { AgentSpec, Ctx } from '../types'
 import { join } from 'node:path'
 import { isDirectorySync } from '../fs'
+import { resolveLocation } from '../locations'
 
 interface PackageRoot {
   manager: 'npm' | 'pipx'
@@ -11,14 +12,12 @@ interface PackageRoot {
  * Where package managers leave global records. Only fixed, well-known
  * locations: no shelling out to `npm root -g` or `brew --prefix`.
  */
-function packageRoots(ctx: Ctx): PackageRoot[] {
+function packageRoots(ctx: Ctx, spec: AgentSpec): PackageRoot[] {
   const roots: PackageRoot[] = []
   if (ctx.platform === 'win32') {
-    if (ctx.env.APPDATA) {
-      roots.push({
-        manager: 'npm',
-        dir: join(ctx.env.APPDATA, 'npm', 'node_modules'),
-      })
+    if (spec.packages?.length) {
+      const location = resolveLocation(ctx, { base: 'APPDATA', path: 'npm/node_modules' })!
+      roots.push({ manager: 'npm', dir: location.path })
     }
   }
   else {
@@ -40,7 +39,7 @@ function packageRoots(ctx: Ctx): PackageRoot[] {
 
 /** Return evidence like `npm:@anthropic-ai/claude-code`, or undefined. */
 export function findPackageRecord(ctx: Ctx, spec: AgentSpec): string | undefined {
-  for (const root of packageRoots(ctx)) {
+  for (const root of packageRoots(ctx, spec)) {
     const names = root.manager === 'npm'
       ? spec.packages
       : spec.pipx

@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 import type { AgentReport, Ctx, PruneResult } from './types'
 import process from 'node:process'
+import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { agents } from './agents'
 import { STALE_TRASH_MS, VERSION } from './constants'
 import { createContext } from './context'
 import { formatBytes, formatJson, formatPath, formatReport } from './format'
+import { pruneBlockReason } from './policy'
 import { prune, trashRoot } from './prune'
 import { listTrash, restore } from './restore'
-import { pruneBlockReason, scan } from './scan'
+import { scan } from './scan'
 
 const COMMANDS = ['scan', 'prune', 'restore']
 const FLAGS = [
   'json',
+  'explain',
   'agent',
   'yes',
   'force-recent',
@@ -21,23 +24,24 @@ const FLAGS = [
 ]
 const AGENT_IDS = agents.map(agent => agent.id).join(', ')
 
-const HELP = `agent-knip ${VERSION}: find leftover directories of AI coding agents you no longer use
+const HELP = `agent-knip ${VERSION}: review agent data and local installation evidence
 
 Usage:
   agent-knip                  Same as "agent-knip scan"
   agent-knip scan             Report leftovers (read-only)
-  agent-knip prune            Move unused leftovers to the trash (needs --yes)
+  agent-knip prune            Move verified cleanup candidates (needs --yes)
   agent-knip restore          List the trash, or put everything back with --all
 
 Commands:
-  scan [-h] [--json] [--agent <id>]
-  prune [-h] [--yes] [--agent <id>] [--force-recent]
+  scan [-h] [--json] [--explain] [--agent <id>]
+  prune [-h] [--yes] [--agent <id>] [--force-recent] [--explain]
   restore [-h] [--list] [--all]
 
 Options:
   -h, --help       Show help (available on every command)
   -v, --version    Show version
-  --json           Stable JSON output (scan only)
+  --json           JSON report schema v2 (scan only)
+  --explain        Show checked evidence, coverage limits and cleanup decisions
   --agent <id>     Limit to one agent: ${AGENT_IDS}
   --yes            Required for prune to move anything
   --force-recent   Also prune paths changed in the last 7 days
@@ -47,7 +51,9 @@ Options:
 Safety:
   Nothing is deleted unless you run "prune --yes".
   Moves go to ~/.agent-knip/trash and "restore --all" puts them back.
-  Credentials and symlinks are reported but never moved.
+  Reference-only and unverified-platform entries are never moved.
+  Missing install evidence is not proof of uninstallation.
+  Known credential containers and symlinks are skipped.
 
 Examples:
   npx agent-knip              # see what is left over
@@ -60,21 +66,23 @@ const SCAN_HELP = `agent-knip scan: report leftovers, change nothing
 Usage: agent-knip scan [options]
 
 Options:
-  --json         Stable JSON output
+  --json         JSON report schema v2
+  --explain      Show evidence and cleanup decisions
   --agent <id>   Only this agent: ${AGENT_IDS}
   -h, --help     Show this help
 
 Exit codes: 0 nothing to prune, 1 error, 2 leftovers found (nothing changed)
 `
 
-const PRUNE_HELP = `agent-knip prune: move unused leftovers into the trash
+const PRUNE_HELP = `agent-knip prune: move verified cleanup candidates into the trash
 
 Usage: agent-knip prune [options]
 
 Options:
   --yes          Actually move anything (without it, this is a dry run)
   --agent <id>   Only this agent: ${AGENT_IDS}
-  --force-recent Also prune paths changed in the last 7 days
+  --force-recent Ignore age only; never bypass reference/platform/install guards
+  --explain      Show evidence and cleanup decisions
   -h, --help     Show this help
 
 Skipped on purpose: credentials, symlinks/junctions, unreadable paths and
@@ -101,12 +109,17 @@ const HELP_BY_COMMAND: Record<string, string> = {
 }
 
 const ALLOWED_FLAGS: Record<string, string[]> = {
-  scan: ['json', 'agent'],
-  prune: ['yes', 'agent', 'force-recent'],
+  scan: ['json', 'agent', 'explain'],
+  prune: [
+    'yes',
+    'agent',
+    'force-recent',
+    'explain',
+  ],
   restore: ['list', 'all'],
 }
 
-export async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[], context?: Ctx): Promise<number> {
   if (argv[0] === '-h' || argv[0] === '--help') {
     out(HELP)
     return 0
@@ -130,6 +143,7 @@ export async function main(argv: string[]): Promise<number> {
       options: {
         'help': { type: 'boolean', short: 'h' },
         'json': { type: 'boolean' },
+        'explain': { type: 'boolean' },
         'agent': { type: 'string' },
         'yes': { type: 'boolean' },
         'force-recent': { type: 'boolean' },
@@ -163,14 +177,14 @@ export async function main(argv: string[]): Promise<number> {
     return 1
   }
 
-  const ctx = createContext()
+  const ctx = context ?? createContext()
   const color = Boolean(process.stdout.isTTY)
 
   if (command === 'scan') {
-    return runScan(ctx, values.agent, values.json, color)
+    return runScan(ctx, values.agent, values.json, color, values.explain)
   }
   if (command === 'prune') {
-    return runPrune(ctx, values.agent, values.yes, values['force-recent'], color)
+    return runPrune(ctx, values.agent, values.yes, values['force-recent'], color, values.explain)
   }
   return runRestore(ctx, values.all)
 }
@@ -196,14 +210,14 @@ function findInvalidFlag(command: string, values: Record<string, unknown>): stri
   }
 }
 
-async function runScan(ctx: Ctx, agent: string | undefined, json: boolean | undefined, color: boolean): Promise<number> {
+async function runScan(ctx: Ctx, agent: string | undefined, json: boolean | undefined, color: boolean, explain?: boolean): Promise<number> {
   const reports = await scan(ctx, { agent })
 
   if (json) {
     out(formatJson(reports, ctx.now))
   }
   else {
-    process.stdout.write(formatReport(reports, { now: ctx.now, color }))
+    process.stdout.write(formatReport(reports, { now: ctx.now, color, explain }))
     await warnStaleTrash(ctx)
   }
 
@@ -229,18 +243,36 @@ async function runPrune(
   yes: boolean | undefined,
   forceRecent: boolean | undefined,
   color: boolean,
+  explain?: boolean,
 ): Promise<number> {
   if (!yes) {
-    return previewPrune(ctx, agent, color)
+    return previewPrune(ctx, agent, color, forceRecent, explain)
   }
-  printPruneResult(await prune(ctx, { agent, forceRecent }), ctx)
-  return 0
+  if (explain) {
+    const reports = await scan(ctx, { agent })
+    process.stdout.write(formatReport(reports, {
+      now: ctx.now,
+      color,
+      explain,
+      forceRecent,
+    }))
+  }
+  const result = await prune(ctx, { agent, forceRecent })
+  printPruneResult(result, ctx)
+  return result.skipped.some(skip => skip.reason.startsWith('move failed:'))
+    ? 1
+    : 0
 }
 
-async function previewPrune(ctx: Ctx, agent: string | undefined, color: boolean): Promise<number> {
+async function previewPrune(ctx: Ctx, agent: string | undefined, color: boolean, forceRecent?: boolean, explain?: boolean): Promise<number> {
   const reports = await scan(ctx, { agent })
-  process.stdout.write(formatReport(reports, { now: ctx.now, color }))
-  if (!hasReclaimable(reports, ctx.now)) {
+  process.stdout.write(formatReport(reports, {
+    now: ctx.now,
+    color,
+    explain,
+    forceRecent,
+  }))
+  if (!hasReclaimable(reports, ctx.now, forceRecent)) {
     return 0
   }
   out('  Dry run: nothing moved. Re-run `agent-knip prune --yes` to move the paths above.')
@@ -330,10 +362,9 @@ async function listRestore(ctx: Ctx): Promise<number> {
   return 0
 }
 
-function hasReclaimable(reports: AgentReport[], now: number): boolean {
+function hasReclaimable(reports: AgentReport[], now: number, forceRecent = false): boolean {
   return reports.some(report =>
-    report.state === 'configured'
-    && report.paths.some(path => !pruneBlockReason(report.state, path, now)),
+    report.paths.some(path => !pruneBlockReason(report, path, now, forceRecent)),
   )
 }
 
@@ -355,4 +386,14 @@ function err(line: string): void {
   process.stderr.write(`${line}\n`)
 }
 
-process.exitCode = await main(process.argv.slice(2))
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    process.exitCode = await main(process.argv.slice(2))
+  }
+  catch (error) {
+    err(error instanceof Error
+      ? error.message
+      : String(error))
+    process.exitCode = 1
+  }
+}

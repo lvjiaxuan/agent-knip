@@ -1,122 +1,124 @@
 # agent-knip
 
-> Trim the config directories left behind by AI agents you no longer use.
+> Review AI agent data directories and local installation evidence before cleaning up.
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 
-卸载了 Claude Code、Codex、Cursor，`~/.claude`、`~/.codex`、`~/.cursor` 还在。它们不会自己消失，往往带着几百 MB 的会话记录，安静地躺在用户目录里。
+Agent 卸载后，配置、缓存和会话目录可能继续留在磁盘上。agent-knip 列出登记过的目录、统计体积，并解释它查到了哪些安装证据。
 
-agent-knip 找出这些已经没有对应软件的目录，量出体积，然后移进隔离区。**默认什么都不删**，确认之后也只是移动，`restore` 一条命令就能放回去。
+**找不到安装证据，不等于软件已卸载。** 工具默认只读；只有已维护、当前平台已核验的条目，才可能成为清理候选。确认之后移入隔离区，不直接删除。
 
-## 用法
+Not related to [knip](https://knip.dev), the unused-code finder.
+
+## 使用
+
+需要 Node.js >=22，零运行时依赖。
 
 ```bash
-# 只体检，不改任何文件
+# 只报告
 npx agent-knip
 
-# 看完报告，确认后收进隔离区
+# 为什么检测到了 / 为什么没进入清理候选
+npx agent-knip scan --agent zed --explain
+
+# 查看候选和每条保留理由，不做移动
+npx agent-knip prune --explain
+
+# 用户确认后移动候选
 npx agent-knip prune --yes
 
-# 反悔了
+# 还原
+npx agent-knip restore --list
 npx agent-knip restore --all
-
-# 忘了怎么用
-npx agent-knip -h
 ```
 
-需要 Node.js 22 或更高版本，没有运行时依赖。
+> npm 已发布的 0.1.0 仍使用旧行为。本分支的方向 A 重构尚未发布；本地运行 `pnpm build`，然后用 `node dist/cli.mjs scan --explain` 验证。
 
-典型输出，结果按可信度分成三组：
+## 报告含义
 
-```text
-  agent-knip · 4 agents, 1.22 GB
-
-  Unused (2)                      only config left, safe to prune
-  DIRECTORY             SIZE  MODIFIED  AGENT        RESULT
-  ~/.claude           412 MB   18d ago  Claude Code  prunable
-  ~/.claude.json       514 B   18d ago  Claude Code  ⚠ skipped: credentials
-  ~/.codex             38 MB   3mo ago  Codex CLI    prunable
-
-  Unknown (1)                     never cleaned, check it yourself
-  DIRECTORY             SIZE  MODIFIED  AGENT        RESULT
-  ~/.gemini            11 MB    6d ago  Gemini CLI   unknown: bin found, --version failed
-
-  In use (1)
-  DIRECTORY             SIZE  MODIFIED  AGENT        RESULT
-  ~/.cursor           790 MB    3d ago  Cursor       in use
-
-  450 MB can be reclaimed. Nothing has been changed.
-  Run `agent-knip prune` to move them to ~/.agent-knip/trash.
-```
-
-需要给脚本用时加 `--json`，输出带 schema 版本的稳定结构。
-
-## 它怎么判断"已经没装了"
-
-只看三类本地证据，不联网：
-
-| 证据 | 说明 |
-| --- | --- |
-| 可执行文件 | `PATH` 里能不能找到这个 agent 的命令 |
-| 安装记录 | npm 全局目录、pipx、Homebrew、应用安装目录 |
-| 配置目录 | `~/.claude` 这类目录本身 |
-
-三者组合出三种状态，而不是一个布尔值：
-
-| 状态 | 含义 | 会被清理吗 |
+| 分组 | 实际含义 | 会进入清理候选吗 |
 | --- | --- | --- |
-| `installed` | 至少有一个强证据 | 不会，只报告 |
-| `unknown` | 有二进制但跑不起来，或目录读不了 | 不会，只报告 |
-| `configured` | 只剩目录，找不到任何软件痕迹 | 会，且需显式确认 |
+| `No install found` | 已核验平台上，在已支持的检测位置没有找到安装证据；**不是卸载证明** | 只有通过所有路径保护规则的条目 |
+| `Check yourself` | 检测失败、目录无法完整读取，或当前平台未经核验 | 不会 |
+| `Install found` | 找到命令、包记录或已登记的安装目录；不声称进程正在运行 | 不会 |
+| `Reference only` | 从 `skills` 导入的未经核验目录信息 | 永远不会，包括 `--force-recent` |
 
-这套判断不可能 100% 准确：便携版、WSL 里装的、dotfiles 同步过来的配置，都可能被误判成"没装"。所以判断结果只决定"要不要在报告里提醒你"，绝不直接决定删除。报告里 `Unknown` 单独成组，就是为了让拿不准的东西自己说话：它永远不会被清理。
+每个分组保留 `DIRECTORY / SIZE / MODIFIED / AGENT / RESULT` 表头。`MODIFIED` 是目录树的最新修改时间，不是最后使用时间。`candidate (confirm)` 只表示可以由用户确认移动，不代表可以放心删除。
 
-## 安全设计
+`--explain` 会逐项输出：
 
-1. 默认只读。不带子命令就只打印报告，不写任何文件。
-2. 只处理登记表里的路径。不扫全盘，不做猜测式删除。
-3. 删除等于移动。目标 `~/.agent-knip/trash/`，附带 `manifest.json`，随时可还原。
-4. 凭据文件不动手。`~/.claude.json` 这类独立凭据只标记、不移动；如果凭据位于被清理目录内部（例如 `~/.codex/auth.json`），它会随整个目录进入隔离区，仍然可以 `restore` 回来。
-5. 7 天内有改动就跳过。正在使用的目录不会被动。
-6. symlink / junction 只报告不动手。指向 OneDrive 的目录不会被递归删除。
+- 路径解析到哪里、存在/缺失/不适用/读取失败；
+- PATH 命中、固定 npm/pipx 位置的包记录、安装目录；
+- 是否运行了无 shell 的 `--version` 探测，成功、失败还是跳过；
+- 条目的来源、当前平台的清理支持状态、每条路径的保留理由；
+- 尚未覆盖的检查：操作系统卸载注册表、运行进程、便携版/WSL 安装和 shell 历史。
 
-## 还原
+缺失证据会写成 `not-found`，不会伪装成“确认未安装”。`--agent` 过滤报告，但不会绕过跨 agent 的共享/嵌套目录保护。没有数据路径但有安装证据时仍会报告；指定一个完全不存在的 agent 时，`--explain` 也会展示已执行的检查。
+
+## 已核验范围
+
+目前仅以下**路径映射在 Windows 上有实机观察记录**，开放受保护的清理候选：
+
+- Claude Code
+- Codex CLI
+- Gemini CLI
+- Zed
+
+这不是“完整卸载检测已核验”的保证。Cursor、Aider、OpenCode 保留人工维护的检测信息，但未核验平台的清理始终禁用。macOS/Linux 目前报告、解释和还原可用，**不开放自动候选清理**，直到补齐该平台的实机核验。
+
+其余 69 个 `skills` 导入条目统一为 reference。它们的目录只能说明“有这份数据”，不能证明 agent 安装/卸载，也不能凭 7 天未改动升级成清理候选。
+
+## 安全边界
+
+1. 默认只读；CLI 只有 `prune --yes` 才执行移动。
+2. reference、未核验平台、检测出错、存在安装证据的条目都不能清理。
+3. 7 天内目录树有修改则保留；`--force-recent` **只绕过时间窗口**，不能绕过以上限制。
+4. 独立凭据文件不移动。若目录内存在已登记的凭据文件名（如 Codex 的 `auth.json`），跳过整个目录；不读取凭据内容。未知名称的凭据无法自动识别，用户仍须检查配置和会话内容。
+5. symlink/junction、带链接的祖先目录、相对环境变量根路径、类型不符、跨 agent 共享/嵌套路径都不能清理。环境变量解析到相同路径时不会重复计量或移动。
+6. 隔离区每批使用独占目录；**先持久化 manifest，再 rename**。目标冲突不覆盖；隔离区链接被拒绝。跨分区返回 `EXDEV` 并保留原目录，不退化为 copy + delete。
+7. restore 验证 v1 manifest 和 payload 路径；损坏/穿越/链接被拒绝。原路径已占用时保留隔离项用于重试；未登记的隔离区文件绝不递归删除。隔离区没有自动过期删除。
+
+这些是普通本地操作的保护措施，不是对恶意并发文件替换的原子安全保证。Node 的路径检查与 rename 之间仍有竞态窗口，不要在其他程序正修改同一目录时清理。
+
+## JSON / API
 
 ```bash
-npx agent-knip restore --list   # 看看隔离区里有什么
-npx agent-knip restore --all    # 全部放回原位
+node dist/cli.mjs scan --json --explain
 ```
 
-原路径如果已经被占用，`restore` 会拒绝执行并告诉你冲突在哪，不会覆盖、不会合并。
+`--json` 始终只输出 JSON；解释数据在每个 agent 的 `checks` 中，不混入人类文本。
 
-## 已知限制
+当前报告 schema 为 **v2**，分组键为 `noInstallFound / checkYourself / installFound / reference`，并提供 `candidates`。`cleanupSupported` 和每条路径的阻止理由用于解释决策；`score` 只是信号权重和，**不是置信概率**。
 
-- 检测基于本地痕迹，便携版、WSL 内安装、多机同步的配置会被判成 `installed`（偏保守，不会误删）
-- 隔离区不会自动清理，需要你手动删 `~/.agent-knip`
-- 除手写登记的 agent 外，生成表里的 69 个 agent 来自 `skills` 包，只有配置目录、没有安装证据，最多只能到 `configured`，判定靠"目录最近没被改动"兜底
-- SSD 上没有"彻底擦除"这回事，本工具也不假装提供
+编程接口仍保留 `installed / configured / unknown` 作为证据状态，不再把它们等同于“正在使用 / 已卸载”。AgentSpec 从 `paths + apps` 改为统一 `locations`，API 使用方需要同步迁移。隔离 manifest 仍是 **v1**，与报告版本分开，旧批次不依赖新登记表也可还原。
 
-## 和 knip 的关系
+退出码：`0` 正常且无待确认候选，`1` 运行错误，`2` 存在待确认候选但没有执行移动。prune 预览、`--force-recent`、实际执行使用同一个候选规则。
 
-没有关系。[knip](https://knip.dev) 找的是代码里没人引用的文件；agent-knip 找的是硬盘上没人使用的 agent 目录。`knip` 在荷兰语里是"修剪"的意思，这里借的是同一个意象。
+## 开发和添加 agent
 
-## 添加一个 agent
+```bash
+pnpm install
+pnpm gen:agents
+pnpm run ci
+```
 
-在 `src/agents.ts` 里加一条记录，跑 `pnpm test`。收录标准：**路径在 Windows 和 macOS 上实机确认过**，猜的不收。
+人工维护 `src/agents.ts`。一个 Location 必须说明相对路径、base、平台、data/install 角色、类型和数据种类；配置目录不能充当 install 证据。路径必须是相对的、不能逃逸指定根目录。
 
-`src/agents.generated.ts` 不手写，由 `pnpm gen:agents` 从 `skills` 包重新生成——那 69 条只有配置目录，没有 bin/包记录，所以它们永远停在 `configured`。Zed 因为 Windows、XDG 和 Flatpak 的配置路径不同，单独在 `src/agents.ts` 维护。想把生成条目升级成 `installed` 级别，得在 `src/agents.ts` 里补 `bins` 或 `packages` 并实机确认。
+生成文件 `src/agents.generated.ts` 只能由 `scripts/sync-agents.mjs` 生成，并且始终标记为 reference。升级到 curated 时先在脚本排除该 id，再补平台位置和安装检测测试。只有附带平台实机核验记录后才添加 `verifiedPlatforms`；不要为了让测试通过给所有平台开权限。
+
+当前读取已安装 `skills` bundle 中表数据的生成方式依赖上游构建布局，升级 `skills` 后须检查生成 diff。运行时不加载 `skills`、不联网、不读取 shell 历史。
+
+下一阶段再补 Windows 卸载注册表/开始菜单等独立证据提供者；本轮不以添加更多弱证据来扩大“已核验”范围。
 
 ## License
 
-[MIT](./LICENSE.md) License
-
-<!-- Badges -->
+[MIT](./LICENSE.md)
 
 [npm-version-src]: https://img.shields.io/npm/v/agent-knip?style=flat&colorA=080f12&colorB=1fa669
 [npm-version-href]: https://npmx.dev/package/agent-knip
 [npm-downloads-src]: https://img.shields.io/npm/dm/agent-knip?style=flat&colorA=080f12&colorB=1fa669
 [npm-downloads-href]: https://npmx.dev/package/agent-knip
 [license-src]: https://img.shields.io/github/license/lvjiaxuan/agent-knip.svg?style=flat&colorA=080f12&colorB=1fa669
-[license-href]: https://github.com/lvjiaxuan/agent-knip/blob/main/LICENSE
+[license-href]: https://github.com/lvjiaxuan/agent-knip/blob/main/LICENSE.md

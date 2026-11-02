@@ -1,7 +1,8 @@
 export type DirKind = 'config' | 'history' | 'cache' | 'credentials'
+/** Evidence states, not a claim that an agent was uninstalled or is running. */
 export type State = 'installed' | 'configured' | 'unknown'
 export type ProbeFn = (bin: string) => Promise<boolean>
-export type PathBase = 'APPDATA' | 'LOCALAPPDATA' | 'XDG_CONFIG_HOME' | 'FLATPAK_XDG_CONFIG_HOME'
+export type PathBase = 'APPDATA' | 'LOCALAPPDATA' | 'XDG_CONFIG_HOME' | 'FLATPAK_XDG_CONFIG_HOME' | 'PROGRAMFILES' | 'PROGRAMFILES_X86' | 'APPLICATIONS'
 
 export interface Ctx {
   home: string
@@ -11,30 +12,43 @@ export interface Ctx {
 }
 
 export interface PathSpec {
-  /** Path relative to home, or to `base` when set; always `/`-separated. */
+  /** Relative to home or the declared base. Absolute paths and traversal are rejected. */
   path: string
   base?: PathBase
+  platforms?: NodeJS.Platform[]
   type: 'dir' | 'file'
   kind: DirKind
+}
+
+export type Location = PathSpec & {
+  role: 'data' | 'install'
+  /** Known credential filenames inside a data directory; contents are never read. */
+  protectedFiles?: string[]
 }
 
 export interface AgentSpec {
   id: string
   name: string
-  /** Commands to resolve on PATH; absent when only the config dir is known. */
+  registry: 'curated' | 'reference'
+  /** Cleanup is disabled on every platform not explicitly verified here. */
+  verifiedPlatforms?: NodeJS.Platform[]
   bins?: string[]
-  /** npm package names, compared against global node_modules. */
   packages?: string[]
-  /** pipx venv names. */
   pipx?: string[]
-  /** App install locations; `%VAR%` is resolved from Ctx.env. */
-  apps?: Partial<Record<'win32' | 'darwin' | 'linux', string[]>>
-  paths: PathSpec[]
+  locations: Location[]
+}
+
+export interface EvidenceCheck {
+  source: 'location' | 'binary' | 'package' | 'probe' | 'policy'
+  status: 'found' | 'not-found' | 'error' | 'skipped'
+  detail: string
 }
 
 export interface PathReport {
   path: string
   base?: PathBase
+  /** Resolved by scan, never accepted as a user-selected cleanup target. */
+  resolvedPath?: string
   type: 'dir' | 'file'
   kind: DirKind
   bytes: number
@@ -42,17 +56,19 @@ export interface PathReport {
   modifiedAt: number
   symlink: boolean
   error?: string
+  blockedReason?: string
 }
 
 export interface AgentReport {
   agent: AgentSpec
   state: State
+  /** Sum of observed signals, NOT a probability or confidence percentage. */
   score: number
-  /** e.g. `bin:/usr/local/bin/claude`, `npm:@anthropic-ai/claude-code` */
   evidence: string[]
+  checks: EvidenceCheck[]
+  cleanupSupported: boolean
   paths: PathReport[]
   bytes: number
-  /** Why a path will not be pruned: credentials, recent, symlink, unreadable… */
   skips: string[]
   reason?: string
 }
@@ -70,7 +86,6 @@ export interface PruneOptions {
 export interface ManifestItem {
   id: string
   from: string
-  /** Path relative to the trash entry directory. */
   to: string
   kind: DirKind
   bytes: number

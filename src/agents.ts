@@ -1,117 +1,216 @@
 import type { AgentSpec } from './types'
 import { importedAgents } from './agents.generated'
 
-/**
- * Discovery is limited to the paths below on purpose: no scanning of home, no
- * guessing.
- *
- * The entries here were checked on a real home and carry install evidence
- * (bins / packages / apps). `importedAgents` is generated from the `skills`
- * package and only knows config directories, so those can never reach
- * `installed`; they lean on the recent-mtime guard instead.
- */
+/** Data locations are not install evidence. Cleanup support is explicitly per platform. */
 export const agents: AgentSpec[] = [
   {
     id: 'claude',
     name: 'Claude Code',
+    registry: 'curated',
+    verifiedPlatforms: ['win32'],
     bins: ['claude'],
     packages: ['@anthropic-ai/claude-code'],
-    paths: [
-      { path: '.claude', type: 'dir', kind: 'history' },
-      // File, and it holds the OAuth account: never pruned.
-      { path: '.claude.json', type: 'file', kind: 'credentials' },
+    locations: [
+      {
+        role: 'data',
+        path: '.claude',
+        type: 'dir',
+        kind: 'history',
+        protectedFiles: ['.credentials.json'],
+      },
+      {
+        role: 'data',
+        path: '.claude.json',
+        type: 'file',
+        kind: 'credentials',
+      },
     ],
   },
   {
     id: 'codex',
     name: 'Codex CLI',
+    registry: 'curated',
+    verifiedPlatforms: ['win32'],
     bins: ['codex'],
     packages: ['@openai/codex'],
-    paths: [
-      // Also contains auth.json; moving the directory is reversible.
-      { path: '.codex', type: 'dir', kind: 'history' },
+    locations: [
+      {
+        role: 'data',
+        path: '.codex',
+        type: 'dir',
+        kind: 'history',
+        protectedFiles: ['auth.json'],
+      },
     ],
   },
   {
     id: 'gemini',
     name: 'Gemini CLI',
+    registry: 'curated',
+    verifiedPlatforms: ['win32'],
     bins: ['gemini'],
     packages: ['@google/gemini-cli'],
-    paths: [
-      { path: '.gemini', type: 'dir', kind: 'history' },
+    locations: [
+      {
+        role: 'data',
+        path: '.gemini',
+        type: 'dir',
+        kind: 'history',
+        protectedFiles: ['oauth_creds.json', 'google_accounts.json'],
+      },
     ],
   },
   {
     id: 'cursor',
     name: 'Cursor',
-    bins: ['cursor-agent'],
-    paths: [
-      { path: '.cursor', type: 'dir', kind: 'cache' },
+    registry: 'curated',
+    bins: ['cursor-agent', 'cursor'],
+    locations: [
+      {
+        role: 'data',
+        path: '.cursor',
+        type: 'dir',
+        kind: 'cache',
+      },
+      {
+        role: 'install',
+        path: 'Programs/cursor',
+        base: 'LOCALAPPDATA',
+        type: 'dir',
+        kind: 'config',
+        platforms: ['win32'],
+      },
+      {
+        role: 'install',
+        path: 'Cursor.app',
+        base: 'APPLICATIONS',
+        type: 'dir',
+        kind: 'config',
+        platforms: ['darwin'],
+      },
     ],
-    apps: {
-      win32: ['%LOCALAPPDATA%/Programs/cursor'],
-      darwin: ['/Applications/Cursor.app'],
-    },
   },
   {
     id: 'aider',
     name: 'Aider',
+    registry: 'curated',
     bins: ['aider'],
     pipx: ['aider-chat'],
-    paths: [
-      { path: '.aider.chat.history.md', type: 'file', kind: 'history' },
-      { path: '.aider.input.history', type: 'file', kind: 'history' },
-      { path: '.aider.conf.yml', type: 'file', kind: 'config' },
+    locations: [
+      {
+        role: 'data',
+        path: '.aider.chat.history.md',
+        type: 'file',
+        kind: 'history',
+      },
+      {
+        role: 'data',
+        path: '.aider.input.history',
+        type: 'file',
+        kind: 'history',
+      },
+      {
+        role: 'data',
+        path: '.aider.conf.yml',
+        type: 'file',
+        kind: 'config',
+      },
     ],
   },
   {
     id: 'opencode',
     name: 'OpenCode',
+    registry: 'curated',
     bins: ['opencode'],
     packages: ['opencode-ai'],
-    paths: [
-      { path: '.config/opencode', type: 'dir', kind: 'config' },
-      { path: '.local/share/opencode', type: 'dir', kind: 'history' },
+    locations: [
+      {
+        role: 'data',
+        path: '.config/opencode',
+        type: 'dir',
+        kind: 'config',
+      },
+      {
+        role: 'data',
+        path: '.local/share/opencode',
+        type: 'dir',
+        kind: 'history',
+      },
     ],
   },
   {
     id: 'zed',
     name: 'Zed',
+    registry: 'curated',
+    verifiedPlatforms: ['win32'],
     bins: ['zed'],
-    paths: [
+    locations: [
       {
+        role: 'data',
         path: 'zed',
         base: 'XDG_CONFIG_HOME',
         type: 'dir',
         kind: 'config',
+        platforms: ['linux', 'darwin'],
       },
       {
+        role: 'data',
         path: 'Zed',
         base: 'APPDATA',
         type: 'dir',
         kind: 'config',
+        platforms: ['win32'],
       },
+      // Local Zed data includes conversations/databases, not only disposable caches.
       {
+        role: 'data',
         path: 'Zed',
         base: 'LOCALAPPDATA',
         type: 'dir',
-        kind: 'cache',
+        kind: 'history',
+        platforms: ['win32'],
       },
       {
+        role: 'data',
         path: 'zed',
         base: 'FLATPAK_XDG_CONFIG_HOME',
         type: 'dir',
         kind: 'config',
+        platforms: ['linux'],
+      },
+      {
+        role: 'install',
+        path: 'Programs/Zed',
+        base: 'LOCALAPPDATA',
+        type: 'dir',
+        kind: 'config',
+        platforms: ['win32'],
+      },
+      {
+        role: 'install',
+        path: 'Zed',
+        base: 'PROGRAMFILES',
+        type: 'dir',
+        kind: 'config',
+        platforms: ['win32'],
+      },
+      {
+        role: 'install',
+        path: 'Zed',
+        base: 'PROGRAMFILES_X86',
+        type: 'dir',
+        kind: 'config',
+        platforms: ['win32'],
+      },
+      {
+        role: 'install',
+        path: 'Zed.app',
+        base: 'APPLICATIONS',
+        type: 'dir',
+        kind: 'config',
+        platforms: ['darwin'],
       },
     ],
-    apps: {
-      win32: [
-        '%LOCALAPPDATA%/Programs/Zed',
-        '%ProgramFiles%/Zed',
-        '%ProgramFiles(x86)%/Zed',
-      ],
-      darwin: ['/Applications/Zed.app'],
-    },
   },
   ...importedAgents,
 ]

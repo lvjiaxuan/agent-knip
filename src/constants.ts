@@ -1,7 +1,8 @@
 export const VERSION = '0.1.0'
 
-/** Schema version of `scan --json` and of manifest.json. */
-export const SCHEMA_VERSION = 1
+/** Report schema can evolve without invalidating existing quarantine manifests. */
+export const SCHEMA_VERSION = 2
+export const MANIFEST_VERSION = 1
 
 export const TRASH_DIR = '.agent-knip'
 export const TRASH_SUBDIR = 'trash'

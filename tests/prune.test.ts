@@ -111,7 +111,11 @@ describe('prune', () => {
 
     const result = await prune({
       ...ctx,
-      env: { APPDATA: appdata },
+      env: {
+        ...ctx.env,
+        APPDATA: appdata,
+        LOCALAPPDATA: join(home, 'AppData', 'Local'),
+      },
       now: Date.now(),
     })
 
@@ -122,7 +126,11 @@ describe('prune', () => {
 
     const restored = await restore({
       ...ctx,
-      env: { APPDATA: appdata },
+      env: {
+        ...ctx.env,
+        APPDATA: appdata,
+        LOCALAPPDATA: join(home, 'AppData', 'Local'),
+      },
     })
 
     expect(restored.restored).toHaveLength(1)

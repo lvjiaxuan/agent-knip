@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs'
-import { cp, lstat, readdir, rename, rm } from 'node:fs/promises'
+import { lstat, readdir, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export interface MeasuredPath {
@@ -123,8 +123,11 @@ export async function pathExists(path: string): Promise<boolean> {
     await lstat(path)
     return true
   }
-  catch {
-    return false
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(errorCode(error))) {
+      return false
+    }
+    throw error
   }
 }
 
@@ -132,8 +135,11 @@ export function isDirectorySync(path: string): boolean {
   try {
     return statSync(path).isDirectory()
   }
-  catch {
-    return false
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(errorCode(error))) {
+      return false
+    }
+    throw error
   }
 }
 
@@ -141,33 +147,18 @@ export function isFileSync(path: string): boolean {
   try {
     return statSync(path).isFile()
   }
-  catch {
-    return false
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(errorCode(error))) {
+      return false
+    }
+    throw error
   }
 }
 
-/**
- * Rename when possible (same volume, atomic), otherwise copy then remove.
- * The caller reports per-path failures; nothing is swallowed here.
- */
-export async function movePath(from: string, to: string): Promise<'renamed' | 'copied'> {
-  try {
-    await rename(from, to)
-    return 'renamed'
-  }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') {
-      throw error
-    }
-  }
-  await cp(from, to, {
-    recursive: true,
-    force: false,
-    errorOnExist: true,
-    preserveTimestamps: true,
-  })
-  await rm(from, { recursive: true, force: true })
-  return 'copied'
+/** Cross-volume moves fail closed: no partial copies or source deletion. */
+export async function movePath(from: string, to: string): Promise<'renamed'> {
+  await rename(from, to)
+  return 'renamed'
 }
 
 export function errorCode(error: unknown): string {
