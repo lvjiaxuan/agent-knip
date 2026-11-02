@@ -12,6 +12,14 @@ type Paint = (format: 'bold' | 'dim', text: string) => string
 
 const DAY = 24 * 60 * 60 * 1000
 
+const COLUMNS = {
+  directory: 'DIRECTORY',
+  size: 'SIZE',
+  modified: 'MODIFIED',
+  agent: 'AGENT',
+  result: 'RESULT',
+}
+
 interface Group {
   title: string
   note: string
@@ -70,6 +78,7 @@ export function formatReport(reports: AgentReport[], options: FormatOptions): st
 
   const totalBytes = reports.reduce((sum, report) => sum + report.bytes, 0)
   const pathWidth = Math.max(16, ...reports.flatMap(report => report.paths.map(path => `~/${path.path}`.length)))
+  const agentWidth = Math.max(COLUMNS.agent.length, ...reports.map(report => report.agent.name.length))
   const lines = [`  ${paint('bold', 'agent-knip')} ${paint('dim', `· ${count} agent${count === 1
     ? ''
     : 's'}, ${formatBytes(totalBytes)}`)}`]
@@ -81,7 +90,12 @@ export function formatReport(reports: AgentReport[], options: FormatOptions): st
     if (members.length === 0) {
       continue
     }
-    lines.push('', groupHeading(group, members.length, paint), ...renderGroup(members, now, pathWidth))
+    lines.push(
+      '',
+      groupHeading(group, members.length, paint),
+      tableHeader(pathWidth, agentWidth, paint),
+      ...renderGroup(members, now, pathWidth, agentWidth),
+    )
   }
 
   lines.push('')
@@ -98,24 +112,22 @@ export function formatReport(reports: AgentReport[], options: FormatOptions): st
 }
 
 function groupHeading(group: Group, count: number, paint: Paint): string {
-  return `  ${`${group.title} (${count})`.padEnd(32)}${paint('dim', group.note)}`
+  const title = `${group.title} (${count})`
+  if (!group.note) {
+    return `  ${title}`
+  }
+  return `  ${title.padEnd(32)}${paint('dim', group.note)}`
 }
 
-function renderGroup(members: AgentReport[], now: number, pathWidth: number): string[] {
+function tableHeader(pathWidth: number, agentWidth: number, paint: Paint): string {
+  return paint('dim', `  ${COLUMNS.directory.padEnd(pathWidth)}  ${COLUMNS.size.padStart(8)}  ${COLUMNS.modified.padStart(8)}  ${COLUMNS.agent.padEnd(agentWidth)}  ${COLUMNS.result}`)
+}
+
+function renderGroup(members: AgentReport[], now: number, pathWidth: number, agentWidth: number): string[] {
   const lines: string[] = []
   for (const report of members) {
     for (const path of report.paths) {
-      const note = pathNote(report, path, now)
-      const line = [
-        `  ${`~/${path.path}`.padEnd(pathWidth)}`,
-        formatBytes(path.bytes).padStart(8),
-        formatAge(path.modifiedAt, now).padStart(8),
-        `  ${report.agent.name}`,
-        note
-          ? `   ${note}`
-          : '',
-      ].join('  ')
-      lines.push(line.replace(/\s+$/, ''))
+      lines.push(`  ${`~/${path.path}`.padEnd(pathWidth)}  ${formatBytes(path.bytes).padStart(8)}  ${formatAge(path.modifiedAt, now).padStart(8)}  ${report.agent.name.padEnd(agentWidth)}  ${pathResult(report, path, now)}`)
     }
   }
   return lines
@@ -129,23 +141,21 @@ function reclaimableBytes(reports: AgentReport[], now: number): number {
       .reduce((inner, path) => inner + path.bytes, 0), 0)
 }
 
-function pathNote(report: AgentReport, path: PathReport, now: number): string {
-  if (report.state === 'unknown') {
-    return report.reason ?? ''
+function pathResult(report: AgentReport, path: PathReport, now: number): string {
+  if (report.state === 'installed') {
+    return 'in use'
   }
-  if (report.state !== 'configured') {
-    return ''
+  if (report.state === 'unknown') {
+    return `unknown: ${report.reason ?? 'unreadable'}`
   }
   const reason = pruneBlockReason(report.state, path, now)
   if (!reason) {
-    return ''
+    return 'prunable'
   }
   if (reason === 'credentials') {
-    return '⚠ credentials, skipped'
+    return '⚠ skipped: credentials'
   }
-  return reason === 'recent'
-    ? 'recent, skipped'
-    : `${reason}, skipped`
+  return `skipped: ${reason}`
 }
 
 export function formatJson(reports: AgentReport[], now: number): string {

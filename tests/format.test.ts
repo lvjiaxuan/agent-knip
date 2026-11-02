@@ -95,10 +95,20 @@ describe('formatReport', () => {
     expect(output.indexOf('Unused (1)')).toBeLessThan(output.indexOf('Unknown (1)'))
     expect(output.indexOf('Unknown (1)')).toBeLessThan(output.indexOf('In use (1)'))
     expect(output).toContain('~/.claude.json')
-    expect(output).toContain('⚠ credentials, skipped')
-    expect(output).toContain('bin found, --version failed')
+    expect(output).toContain('⚠ skipped: credentials')
+    expect(output).toContain('unknown: bin found, --version failed')
     expect(output).toContain('412 MB can be reclaimed.')
     expect(output).toContain('Nothing has been changed.')
+  })
+
+  it('prints a column header once per group', () => {
+    const output = formatReport(reports, { now })
+
+    expect(output.match(/DIRECTORY/g)).toHaveLength(3)
+    expect(output).toContain('SIZE')
+    expect(output).toContain('MODIFIED')
+    expect(output).toContain('AGENT')
+    expect(output).toContain('RESULT')
   })
 
   it('prints no ANSI escapes when color is off and no absolute home path', () => {
@@ -119,7 +129,7 @@ describe('formatReport', () => {
       }),
     ], { now })
 
-    expect(output).toContain('recent, skipped')
+    expect(output).toContain('skipped: recent')
     expect(output).toContain('Nothing to reclaim.')
   })
 

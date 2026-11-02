@@ -31,18 +31,21 @@ npx agent-knip -h
 典型输出，结果按可信度分成三组：
 
 ```text
-  agent-knip · 4 agents, 1.25 GB
+  agent-knip · 4 agents, 1.22 GB
 
   Unused (2)                      only config left, safe to prune
-  ~/.claude          412 MB    18d ago    Claude Code
-  ~/.claude.json     514 B    18d ago    Claude Code     ⚠ credentials, skipped
-  ~/.codex            38 MB    94d ago    Codex CLI
+  DIRECTORY             SIZE  MODIFIED  AGENT        RESULT
+  ~/.claude           412 MB   18d ago  Claude Code  prunable
+  ~/.claude.json       514 B   18d ago  Claude Code  ⚠ skipped: credentials
+  ~/.codex             38 MB   3mo ago  Codex CLI    prunable
 
   Unknown (1)                     never cleaned, check it yourself
-  ~/.gemini           11 MB     6d ago    Gemini CLI      bin found, --version failed
+  DIRECTORY             SIZE  MODIFIED  AGENT        RESULT
+  ~/.gemini            11 MB    6d ago  Gemini CLI   unknown: bin found, --version failed
 
   In use (1)
-  ~/.cursor          790 MB     3d ago    Cursor
+  DIRECTORY             SIZE  MODIFIED  AGENT        RESULT
+  ~/.cursor           790 MB    3d ago  Cursor       in use
 
   450 MB can be reclaimed. Nothing has been changed.
   Run `agent-knip prune` to move them to ~/.agent-knip/trash.
