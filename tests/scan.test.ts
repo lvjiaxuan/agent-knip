@@ -157,7 +157,7 @@ describe('scan', () => {
     try {
       const appdata = join(home, 'AppData', 'Roaming')
       await makeFile(join(appdata, 'Zed', 'settings.json'), '{}')
-      await makeFile(join(home, 'bin', 'zed.exe'))
+      await makeFile(join(home, 'bin', 'zed.EXE'))
 
       const reports = await scan(
         {
