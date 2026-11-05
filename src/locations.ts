@@ -1,6 +1,7 @@
 import type { Ctx, Location } from './types'
 import { lstat } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { TRASH_DIR } from './constants'
 
 export interface ResolvedLocation {
   path: string
@@ -15,24 +16,42 @@ export function validRelativePath(path: string): boolean {
 }
 
 /** Resolve both data and install locations with the same validation and platform rules. */
-export function resolveLocation(ctx: Ctx, location: Pick<Location, 'path' | 'base' | 'platforms'>): ResolvedLocation | undefined {
+export function resolveLocation(ctx: Ctx, location: Pick<Location, 'path' | 'base' | 'env' | 'platforms'>): ResolvedLocation | undefined {
   if (!validRelativePath(location.path)) {
-    throw new Error(`Invalid registered relative path: ${location.path}`)
+    throw new Error(`登记的相对路径无效：${location.path}`)
   }
   if (location.platforms && !location.platforms.includes(ctx.platform)) {
     return undefined
+  }
+  const override = location.env && ctx.env[location.env]?.trim()
+  if (override) {
+    if (!isAbsolute(override) || override.includes('\0')) {
+      throw new Error(`配置目录必须是有效的绝对路径：${location.env}`)
+    }
+    const path = resolve(override)
+    const trash = resolve(ctx.home, TRASH_DIR)
+    // An override replaces the entire location, so it must not absorb home or recovery data.
+    if (path === dirname(path) || containsPath(path, ctx.home) || containsPath(path, trash) || containsPath(trash, path)) {
+      throw new Error(`配置目录不得覆盖根目录、用户主目录或隔离区：${location.env}`)
+    }
+    return { path, root: path }
   }
   const root = locationRoot(ctx, location.base)
   if (!root) {
     return undefined
   }
   if (!isAbsolute(root)) {
-    throw new Error(`Location base must be absolute: ${location.base ?? 'home'}`)
+    throw new Error(`基础目录必须是绝对路径：${location.base ?? '用户主目录'}`)
   }
   return {
     path: resolve(root, ...location.path.split('/')),
     root: resolve(root),
   }
+}
+
+function containsPath(parent: string, path: string): boolean {
+  const child = relative(parent, path)
+  return child === '' || (!isAbsolute(child) && child !== '..' && !child.startsWith(`..${sep}`))
 }
 
 function locationRoot(ctx: Ctx, base: Location['base']): string | undefined {
@@ -57,7 +76,7 @@ function locationRoot(ctx: Ctx, base: Location['base']): string | undefined {
     'PROGRAMFILES_X86',
   ]
   if (!windowsBases.includes(base)) {
-    throw new Error(`Unknown location base: ${base}`)
+    throw new Error(`未知基础目录：${base}`)
   }
   if (ctx.platform !== 'win32') {
     return undefined
@@ -69,7 +88,7 @@ function locationRoot(ctx: Ctx, base: Location['base']): string | undefined {
       : base
   const root = ctx.env[key]?.trim()
   if (!root && (base === 'APPDATA' || base === 'LOCALAPPDATA')) {
-    throw new Error(`Location base is unavailable: ${base}`)
+    throw new Error(`基础目录不可用：${base}`)
   }
   return root
 }

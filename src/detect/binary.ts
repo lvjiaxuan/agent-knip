@@ -17,7 +17,7 @@ const UNPROBEABLE = new Set(['.cmd', '.bat', '.ps1'])
  */
 export function findBinary(ctx: Ctx, bins: string[] = []): BinaryHit | undefined {
   if (bins.length > 0 && ctx.env.PATH === undefined && ctx.env.Path === undefined) {
-    throw new Error('PATH is unavailable; binary detection was not performed')
+    throw new Error('PATH 不可用；未执行命令检测')
   }
   const dirs = searchDirs(ctx)
   const extensions = candidateExtensions(ctx)
@@ -46,8 +46,8 @@ function candidateExtensions(ctx: Ctx): string[] {
     return ['']
   }
   return [
-    '',
     ...(ctx.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean),
+    '',
   ]
 }
 

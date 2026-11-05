@@ -28,6 +28,27 @@ describe('findBinary', () => {
     }
   })
 
+  it('prefers Windows PATHEXT shims over extensionless files', async () => {
+    const { ctx, home, cleanup } = await createTempHome({ platform: 'win32' })
+    try {
+      const binDir = join(home, 'pnpm-bin')
+      await mkdir(binDir, { recursive: true })
+      await writeFile(join(binDir, 'pi'), '#!/bin/sh')
+      await writeFile(join(binDir, 'pi.CMD'), '')
+
+      const hit = findBinary({
+        ...ctx,
+        env: { PATH: binDir, PATHEXT: '.COM;.EXE;.CMD' },
+      }, ['pi'])
+
+      expect(hit?.path).toBe(join(binDir, 'pi.CMD'))
+      expect(hit?.probeable).toBe(false)
+    }
+    finally {
+      await cleanup()
+    }
+  })
+
   it('treats .exe hits as probeable', async () => {
     const { ctx, home, cleanup } = await createTempHome({ platform: 'win32' })
     try {

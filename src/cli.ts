@@ -6,7 +6,8 @@ import { parseArgs } from 'node:util'
 import { agents } from './agents'
 import { STALE_TRASH_MS, VERSION } from './constants'
 import { createContext } from './context'
-import { formatBytes, formatJson, formatPath, formatReport } from './format'
+import { formatJson, formatPath, formatReason, formatReport } from './format'
+import { errorCode } from './fs'
 import { pruneBlockReason } from './policy'
 import { prune, trashRoot } from './prune'
 import { listTrash, restore } from './restore'
@@ -24,82 +25,81 @@ const FLAGS = [
 ]
 const AGENT_IDS = agents.map(agent => agent.id).join(', ')
 
-const HELP = `agent-knip ${VERSION}: review agent data and local installation evidence
+const HELP = `agent-knip ${VERSION}：查找 agent 遗留数据，经确认后移入可还原的隔离区
 
-Usage:
-  agent-knip                  Same as "agent-knip scan"
-  agent-knip scan             Report leftovers (read-only)
-  agent-knip prune            Move verified cleanup candidates (needs --yes)
-  agent-knip restore          List the trash, or put everything back with --all
+用法：
+  agent-knip                  等同于 "agent-knip scan"
+  agent-knip scan             扫描并报告遗留数据（只读）
+  agent-knip prune --agent <id> 预览单个工具，加 --yes 后移入隔离区
+  agent-knip restore          列出隔离区，加 --all 后全部还原
 
-Commands:
+命令：
   scan [-h] [--json] [--explain] [--agent <id>]
-  prune [-h] [--yes] [--agent <id>] [--force-recent] [--explain]
+  prune [-h] --agent <id> [--yes] [--force-recent] [--explain]
   restore [-h] [--list] [--all]
 
-Options:
-  -h, --help       Show help (available on every command)
-  -v, --version    Show version
-  --json           JSON report schema v2 (scan only)
-  --explain        Show checked evidence, coverage limits and cleanup decisions
-  --agent <id>     Limit to one agent: ${AGENT_IDS}
-  --yes            Required for prune to move anything
-  --force-recent   Also prune paths changed in the last 7 days
-  --list           List the trash (restore)
-  --all            Put every trash entry back (restore)
+选项：
+  -h, --help       显示帮助（所有命令均支持）
+  -v, --version    显示版本
+  --json           输出 JSON 报告，结构版本为 v4（仅 scan）
+  --explain        显示检测依据、覆盖范围和清理决定
+  --agent <id>     scan 筛选结果；prune 必填且仅处理一个 agent：${AGENT_IDS}
+  --yes            确认 prune 将符合条件的路径移入隔离区
+  --force-recent   包含最近 7 天内修改过的路径
+  --list           列出隔离区条目（restore）
+  --all            还原隔离区全部条目（restore）
 
-Safety:
-  Nothing is deleted unless you run "prune --yes".
-  Moves go to ~/.agent-knip/trash and "restore --all" puts them back.
-  Reference-only and unverified-platform entries are never moved.
-  Missing install evidence is not proof of uninstallation.
-  Known credential containers and symlinks are skipped.
+安全说明：
+  默认只读；只有 "prune --agent <id> --yes" 才会移动数据，不会永久删除数据。
+  数据移入 ~/.agent-knip/trash，可用 "restore --all" 还原。
+  清理必须指定单个 agent；只有通过路径安全检查的路径才能移动。
+  没有找到安装依据，不代表已经卸载。
+  含已知凭据的路径会保留；链接只移动入口，不触碰目标数据。
 
-Examples:
-  npx agent-knip              # see what is left over
-  npx agent-knip prune --yes  # move it to the trash
-  npx agent-knip restore --all
+示例：
+  npx agent-knip              # 查看遗留数据
+  npx agent-knip prune --agent qoder --yes  # 将 Qoder 数据移入隔离区
+  npx agent-knip restore --all # 全部还原
 `
 
-const SCAN_HELP = `agent-knip scan: report leftovers, change nothing
+const SCAN_HELP = `agent-knip scan：扫描遗留数据，不修改文件
 
-Usage: agent-knip scan [options]
+用法：agent-knip scan [选项]
 
-Options:
-  --json         JSON report schema v2
-  --explain      Show evidence and cleanup decisions
-  --agent <id>   Only this agent: ${AGENT_IDS}
-  -h, --help     Show this help
+选项：
+  --json         输出 JSON 报告，结构版本为 v4
+  --explain      显示检测依据和清理决定
+  --agent <id>   仅显示指定 agent：${AGENT_IDS}
+  -h, --help     显示帮助
 
-Exit codes: 0 nothing to prune, 1 error, 2 leftovers found (nothing changed)
+退出码：0 没有符合条件的路径；1 出错；2 找到符合条件的路径（未修改文件）
 `
 
-const PRUNE_HELP = `agent-knip prune: move verified cleanup candidates into the trash
+const PRUNE_HELP = `agent-knip prune：预览或将符合条件的遗留数据移入隔离区
 
-Usage: agent-knip prune [options]
+用法：agent-knip prune --agent <id> [选项]
 
-Options:
-  --yes          Actually move anything (without it, this is a dry run)
-  --agent <id>   Only this agent: ${AGENT_IDS}
-  --force-recent Ignore age only; never bypass reference/platform/install guards
-  --explain      Show evidence and cleanup decisions
-  -h, --help     Show this help
+选项：
+  --yes          确认移动数据（未指定时仅预览）
+  --agent <id>   必填；仅处理一个 agent：${AGENT_IDS}
+  --force-recent 仅忽略修改时间限制，不绕过安装证据或路径安全保护
+  --explain      显示检测依据和清理决定
+  -h, --help     显示帮助
 
-Skipped on purpose: credentials, symlinks/junctions, unreadable paths and
-anything whose agent still looks installed. Nothing is deleted; undo with
-"agent-knip restore --all".
+保留原位的路径会说明原因。数据不会永久删除；可用
+"agent-knip restore --all" 还原。
 `
 
-const RESTORE_HELP = `agent-knip restore: put pruned paths back where they came from
+const RESTORE_HELP = `agent-knip restore：将隔离区数据还原到原位置
 
-Usage: agent-knip restore [options]
+用法：agent-knip restore [选项]
 
-Options:
-  --list         List trash entries (default when nothing else is given)
-  --all          Put everything back
-  -h, --help     Show this help
+选项：
+  --list         列出隔离区条目（默认行为）
+  --all          还原全部条目
+  -h, --help     显示帮助
 
-An occupied target path is refused, never merged or overwritten.
+原位置已有文件或目录时会拒绝还原，不会合并或覆盖。
 `
 
 const HELP_BY_COMMAND: Record<string, string> = {
@@ -140,6 +140,7 @@ export async function main(argv: string[], context?: Ctx): Promise<number> {
       args,
       allowPositionals: false,
       strict: true,
+      tokens: true,
       options: {
         'help': { type: 'boolean', short: 'h' },
         'json': { type: 'boolean' },
@@ -153,9 +154,7 @@ export async function main(argv: string[], context?: Ctx): Promise<number> {
     })
   }
   catch (error) {
-    err(error instanceof Error
-      ? error.message
-      : String(error))
+    err(formatArgumentError(error))
     err(HELP)
     return 1
   }
@@ -172,8 +171,16 @@ export async function main(argv: string[], context?: Ctx): Promise<number> {
     return 1
   }
 
-  if (values.agent && !agents.some(agent => agent.id === values.agent)) {
-    err(`Unknown agent "${values.agent}". Known agents: ${AGENT_IDS}.`)
+  if (command === 'prune' && parsed.tokens.filter(token => token.kind === 'option' && token.name === 'agent').length > 1) {
+    err('prune 每次只能指定一个 --agent，不支持批量清理。')
+    return 1
+  }
+  if (values.agent !== undefined && !agents.some(agent => agent.id === values.agent)) {
+    err(`未知 agent："${values.agent}"。可选 agent：${AGENT_IDS}。`)
+    return 1
+  }
+  if (command === 'prune' && !values.agent) {
+    err('prune 必须指定一个 agent，例如：prune --agent qoder')
     return 1
   }
 
@@ -184,9 +191,33 @@ export async function main(argv: string[], context?: Ctx): Promise<number> {
     return runScan(ctx, values.agent, values.json, color, values.explain)
   }
   if (command === 'prune') {
-    return runPrune(ctx, values.agent, values.yes, values['force-recent'], color, values.explain)
+    return runPrune(ctx, values.agent!, values.yes, values['force-recent'], color, values.explain)
   }
   return runRestore(ctx, values.all)
+}
+
+function formatArgumentError(error: unknown): string {
+  const code = errorCode(error)
+  const message = error instanceof Error
+    ? error.message
+    : ''
+  const token = message.match(/'([^']*)'/)?.[1] ?? ''
+  if (code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION') {
+    return `未知选项：${token}`
+  }
+  if (code === 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL') {
+    return `不接受位置参数：${token}`
+  }
+  if (code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE') {
+    if (message.includes('does not take an argument')) {
+      return `选项 ${token} 不接受参数值。`
+    }
+    if (message.includes('ambiguous')) {
+      return `选项 ${token} 缺少明确的参数值；以短横线开头的值请使用 ${token}=<值>。`
+    }
+    return `选项 ${token.replace(' <value>', '')} 缺少参数值。`
+  }
+  return `参数错误：${code}`
 }
 
 function splitCommand(argv: string[]): { command: string, args: string[], code?: number } {
@@ -196,7 +227,7 @@ function splitCommand(argv: string[]): { command: string, args: string[], code?:
     command = args.shift()!
   }
   if (!COMMANDS.includes(command)) {
-    err(`Unknown command "${command}". Try "agent-knip -h".`)
+    err(`未知命令："${command}"。请运行 "agent-knip -h" 查看帮助。`)
     return { command, args, code: 1 }
   }
   return { command, args }
@@ -205,7 +236,7 @@ function splitCommand(argv: string[]): { command: string, args: string[], code?:
 function findInvalidFlag(command: string, values: Record<string, unknown>): string | undefined {
   for (const flag of FLAGS) {
     if (values[flag] !== undefined && !ALLOWED_FLAGS[command].includes(flag)) {
-      return `Option --${flag} is not valid for "${command}".`
+      return `命令 "${command}" 不支持选项 --${flag}。`
     }
   }
 }
@@ -232,14 +263,12 @@ async function warnStaleTrash(ctx: Ctx): Promise<void> {
   if (stale.length === 0) {
     return
   }
-  out(`  ${stale.length} trash entr${stale.length === 1
-    ? 'y is'
-    : 'ies are'} older than 30 days. Run \`agent-knip restore --list\`.`)
+  out(`  隔离区中有 ${stale.length} 批数据已超过 30 天。可运行 \`agent-knip restore --list\` 查看。`)
 }
 
 async function runPrune(
   ctx: Ctx,
-  agent: string | undefined,
+  agent: string,
   yes: boolean | undefined,
   forceRecent: boolean | undefined,
   color: boolean,
@@ -259,12 +288,12 @@ async function runPrune(
   }
   const result = await prune(ctx, { agent, forceRecent })
   printPruneResult(result, ctx)
-  return result.skipped.some(skip => skip.reason.startsWith('move failed:'))
+  return result.skipped.some(skip => skip.reason.startsWith('移动失败：'))
     ? 1
     : 0
 }
 
-async function previewPrune(ctx: Ctx, agent: string | undefined, color: boolean, forceRecent?: boolean, explain?: boolean): Promise<number> {
+async function previewPrune(ctx: Ctx, agent: string, color: boolean, forceRecent?: boolean, explain?: boolean): Promise<number> {
   const reports = await scan(ctx, { agent })
   process.stdout.write(formatReport(reports, {
     now: ctx.now,
@@ -275,33 +304,30 @@ async function previewPrune(ctx: Ctx, agent: string | undefined, color: boolean,
   if (!hasReclaimable(reports, ctx.now, forceRecent)) {
     return 0
   }
-  out('  Dry run: nothing moved. Re-run `agent-knip prune --yes` to move the paths above.')
+  out(`  仅预览，未移动文件。运行 \`agent-knip prune --agent ${agent} --yes${forceRecent ? ' --force-recent' : ''}\` 可将上述路径移入隔离区。`)
   return 2
 }
 
 function printPruneResult(result: PruneResult, ctx: Ctx): void {
   if (result.moved.length === 0) {
-    out('  Nothing to prune.')
+    out('  没有路径可移入隔离区。')
   }
   else {
-    const bytes = result.moved.reduce((sum, item) => sum + item.bytes, 0)
-    out(`  Moved ${result.moved.length} path${result.moved.length === 1
-      ? ''
-      : 's'} (${formatBytes(bytes)}) to ${tildify(result.trashDir!, ctx.home)}`)
+    out(`  已将 ${result.moved.length} 个路径移入隔离区：${tildify(result.trashDir!, ctx.home)}`)
     for (const item of result.moved) {
-      out(`    ${tildify(item.from, ctx.home)}   ${formatBytes(item.bytes)}`)
+      out(`    ${tildify(item.from, ctx.home)}`)
     }
     out('')
-    out('  Run `agent-knip restore --all` to undo.')
+    out('  可运行 `agent-knip restore --all` 还原。')
   }
 
   if (result.skipped.length === 0) {
     return
   }
   out('')
-  out('  Skipped:')
+  out('  已跳过：')
   for (const skip of result.skipped) {
-    out(`    ${formatPath(skip).padEnd(24)} ${skip.reason}`)
+    out(`    ${formatPath(skip).padEnd(24)} ${formatReason(skip.reason)}`)
   }
 }
 
@@ -313,24 +339,22 @@ async function runRestore(ctx: Ctx, all: boolean | undefined): Promise<number> {
   const result = await restore(ctx)
 
   if (result.restored.length > 0) {
-    out(`  Restored ${result.restored.length} path${result.restored.length === 1
-      ? ''
-      : 's'}:`)
+    out(`  已还原 ${result.restored.length} 个路径：`)
     for (const item of result.restored) {
       out(`    ${tildify(item.from, ctx.home)}`)
     }
   }
   else if (result.failed.length === 0) {
-    out('  Trash is empty.')
+    out('  隔离区为空。')
   }
 
   if (result.failed.length === 0) {
     return 0
   }
   out('')
-  out('  Not restored:')
+  out('  未还原：')
   for (const failure of result.failed) {
-    out(`    ${tildify(failure.path, ctx.home)}   ${failure.reason}`)
+    out(`    ${tildify(failure.path, ctx.home)}   ${formatReason(failure.reason)}`)
   }
   return 1
 }
@@ -338,27 +362,24 @@ async function runRestore(ctx: Ctx, all: boolean | undefined): Promise<number> {
 async function listRestore(ctx: Ctx): Promise<number> {
   const entries = await listTrash(ctx)
   if (entries.length === 0) {
-    out('  Trash is empty.')
+    out('  隔离区为空。')
     return 0
   }
 
-  out(`  Trash: ${tildify(trashRoot(ctx), ctx.home)}`)
+  out(`  隔离区：${tildify(trashRoot(ctx), ctx.home)}`)
   for (const entry of entries) {
     const stamp = entry.dir.split(/[\\/]/).pop()!
     if (entry.error) {
-      out(`  ${stamp}   ⚠ ${entry.error}`)
+      out(`  ${stamp}   ⚠ ${formatReason(entry.error)}`)
       continue
     }
-    const bytes = entry.items.reduce((sum, item) => sum + item.bytes, 0)
-    out(`  ${stamp}   ${entry.items.length} item${entry.items.length === 1
-      ? ''
-      : 's'}, ${formatBytes(bytes)}`)
+    out(`  ${stamp}   ${entry.items.length} 个条目`)
     for (const item of entry.items) {
       out(`    ${tildify(item.from, ctx.home)}`)
     }
   }
   out('')
-  out('  Run `agent-knip restore --all` to put everything back.')
+  out('  可运行 `agent-knip restore --all` 全部还原。')
   return 0
 }
 
@@ -391,9 +412,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exitCode = await main(process.argv.slice(2))
   }
   catch (error) {
-    err(error instanceof Error
-      ? error.message
-      : String(error))
+    err(`操作失败：${errorCode(error)}`)
     process.exitCode = 1
   }
 }

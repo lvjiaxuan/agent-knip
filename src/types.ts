@@ -15,6 +15,8 @@ export interface PathSpec {
   /** Relative to home or the declared base. Absolute paths and traversal are rejected. */
   path: string
   base?: PathBase
+  /** Overrides the entire path, not the base; only populated in reports when set. */
+  env?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'
   platforms?: NodeJS.Platform[]
   type: 'dir' | 'file'
   kind: DirKind
@@ -29,9 +31,6 @@ export type Location = PathSpec & {
 export interface AgentSpec {
   id: string
   name: string
-  registry: 'curated' | 'reference'
-  /** Cleanup is disabled on every platform not explicitly verified here. */
-  verifiedPlatforms?: NodeJS.Platform[]
   bins?: string[]
   packages?: string[]
   pipx?: string[]
@@ -39,7 +38,7 @@ export interface AgentSpec {
 }
 
 export interface EvidenceCheck {
-  source: 'location' | 'binary' | 'package' | 'probe' | 'policy'
+  source: 'location' | 'binary' | 'package' | 'probe'
   status: 'found' | 'not-found' | 'error' | 'skipped'
   detail: string
 }
@@ -47,12 +46,14 @@ export interface EvidenceCheck {
 export interface PathReport {
   path: string
   base?: PathBase
+  /** Overrides the entire path, not the base; only populated in reports when set. */
+  env?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'
   /** Resolved by scan, never accepted as a user-selected cleanup target. */
   resolvedPath?: string
   type: 'dir' | 'file'
   kind: DirKind
-  bytes: number
-  sizeComplete: boolean
+  /** True only when the latest modification time covers the entire tree. */
+  metadataComplete: boolean
   modifiedAt: number
   symlink: boolean
   error?: string
@@ -66,9 +67,7 @@ export interface AgentReport {
   score: number
   evidence: string[]
   checks: EvidenceCheck[]
-  cleanupSupported: boolean
   paths: PathReport[]
-  bytes: number
   skips: string[]
   reason?: string
 }
@@ -79,7 +78,7 @@ export interface ScanOptions {
 }
 
 export interface PruneOptions {
-  agent?: string
+  agent: string
   forceRecent?: boolean
 }
 
@@ -88,7 +87,6 @@ export interface ManifestItem {
   from: string
   to: string
   kind: DirKind
-  bytes: number
 }
 
 export interface Manifest {
@@ -108,6 +106,8 @@ export interface Skip {
   id: string
   path: string
   base?: PathBase
+  /** Overrides the entire path, not the base; only populated in reports when set. */
+  env?: 'CLAUDE_CONFIG_DIR' | 'CODEX_HOME'
   reason: string
 }
 

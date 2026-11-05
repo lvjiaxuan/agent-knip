@@ -15,47 +15,78 @@ type Paint = (format: 'bold' | 'dim', text: string) => string
 
 const DAY = 24 * 60 * 60 * 1000
 
+const SOURCE_LABELS = {
+  location: '路径',
+  package: '包记录',
+  binary: '命令文件',
+  probe: '运行探测',
+}
+const STATUS_LABELS = {
+  'found': '已找到',
+  'not-found': '未找到',
+  'skipped': '已跳过',
+  'error': '出错',
+}
+const STATE_LABELS = {
+  installed: '找到安装线索',
+  configured: '未找到安装线索',
+  unknown: '检查未完成',
+}
+const REASON_LABELS: Record<string, string> = {
+  'credentials': '凭据文件',
+  'symlink': '符号链接或目录联接',
+  'install-found': '检测到安装线索',
+  'unknown': '检测未完成',
+  'linked-ancestor': '上级目录含符号链接或目录联接',
+  'type-mismatch': '路径类型与登记信息不符',
+  'credentials-inside': '目录内含已知凭据文件',
+  'shared-or-overlapping-location': '与其他工具共用或嵌套的路径',
+  'unreadable': '无法完整读取或核验路径',
+  'recent': '最近 7 天内有修改',
+}
+
+export function formatReason(reason: string): string {
+  return REASON_LABELS[reason] ?? reason
+}
+
+function textWidth(text: string): number {
+  return [...text].reduce((width, char) => width + (/\p{Script=Han}/u.test(char)
+    ? 2
+    : 1), 0)
+}
+
+function padText(text: string, width: number, start = false): string {
+  const padding = ' '.repeat(Math.max(0, width - textWidth(text)))
+  return start
+    ? padding + text
+    : text + padding
+}
+
 const COLUMNS = {
-  directory: 'DIRECTORY',
-  size: 'SIZE',
-  modified: 'MODIFIED',
-  agent: 'AGENT',
-  result: 'RESULT',
+  directory: '路径',
+  modified: '修改时间',
+  agent: '工具',
+  result: '处理结果',
 }
 
-interface Group {
-  title: string
-  note: string
-  id: ReportGroup
+interface DecisionItem {
+  report: AgentReport
+  path?: PathReport
 }
 
-const GROUPS: Group[] = [
-  { title: 'No install found', note: 'not proof of uninstallation; review before pruning', id: 'noInstallFound' },
-  { title: 'Check yourself', note: 'uncertain or unverified platform; never pruned', id: 'checkYourself' },
-  { title: 'Install found', note: 'installation evidence found; never pruned', id: 'installFound' },
-  { title: 'Reference only', note: 'unverified registry; never pruned', id: 'reference' },
+const GROUP_IDS: ReportGroup[] = [
+  'noInstallFound',
+  'checkYourself',
+  'installFound',
 ]
 
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`
+export function formatPath(path: Pick<PathReport, 'path' | 'base' | 'env' | 'resolvedPath'>): string {
+  if ((path.base || path.env) && path.resolvedPath) {
+    return path.resolvedPath
   }
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let value = bytes / 1024
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit++
+  if (path.env) {
+    return `$${path.env}`
   }
-  const digits = value < 10
-    ? 2
-    : value < 100
-      ? 1
-      : 0
-  return `${Number.parseFloat(value.toFixed(digits))} ${units[unit]}`
-}
-
-export function formatPath(path: Pick<PathReport, 'path' | 'base'>): string {
   if (!path.base) {
     return `~/${path.path}`
   }
@@ -71,12 +102,12 @@ export function formatAge(modifiedAt: number, now: number): string {
   }
   const days = Math.floor((now - modifiedAt) / DAY)
   if (days <= 0) {
-    return 'today'
+    return '今天'
   }
   if (days < 30) {
-    return `${days}d ago`
+    return `${days} 天前`
   }
-  return `${Math.floor(days / 30)}mo ago`
+  return `${Math.floor(days / 30)} 个月前`
 }
 
 export function formatReport(reports: AgentReport[], options: FormatOptions): string {
@@ -87,40 +118,52 @@ export function formatReport(reports: AgentReport[], options: FormatOptions): st
   const count = reports.length
 
   if (count === 0) {
-    return `  ${paint('bold', 'agent-knip')} ${paint('dim', '· no registered agent data or install evidence found')}\n`
+    return `  ${paint('bold', 'agent-knip')} ${paint('dim', '· 未找到已登记的工具数据或安装线索')}\n`
   }
 
-  const totalBytes = reports.reduce((sum, report) => sum + report.bytes, 0)
-  const pathWidth = Math.max(16, ...reports.flatMap(report => report.paths.map(path => formatPath(path).length)))
-  const agentWidth = Math.max(COLUMNS.agent.length, ...reports.map(report => report.agent.name.length))
-  const lines = [`  ${paint('bold', 'agent-knip')} ${paint('dim', `· ${count} agent${count === 1
-    ? ''
-    : 's'}, ${formatBytes(totalBytes)}`)}`]
-
-  for (const group of GROUPS) {
-    const members = reports
-      .filter(report => reportGroup(report) === group.id)
-      .sort((a, b) => b.bytes - a.bytes || a.agent.id.localeCompare(b.agent.id))
-    if (members.length === 0) {
+  const items: DecisionItem[] = []
+  for (const report of reports) {
+    if (report.paths.length === 0) {
+      items.push({ report })
       continue
     }
-    lines.push(
-      '',
-      groupHeading(group, members.length, paint),
-      tableHeader(pathWidth, agentWidth, paint),
-      ...renderGroup(members, now, pathWidth, agentWidth, forceRecent),
-    )
+    for (const path of report.paths) {
+      items.push({ report, path })
+    }
   }
+  const candidates: DecisionItem[] = []
+  const kept: DecisionItem[] = []
+  for (const item of items) {
+    if (item.path && !pruneBlockReason(item.report, item.path, now, forceRecent)) {
+      candidates.push(item)
+    }
+    else {
+      kept.push(item)
+    }
+  }
+  const pathWidth = Math.max(16, ...items.flatMap((item) => {
+    if (!item.path) {
+      return []
+    }
+    return [
+      textWidth(formatPath(item.path)),
+    ]
+  }))
+  const agentWidth = Math.max(4, ...reports.map(report => textWidth(report.agent.name)))
+  const lines = [`  ${paint('bold', 'agent-knip')} ${paint('dim', `· ${count} 个工具`)}`]
 
-  lines.push('')
-  const reclaimable = reclaimablePaths(reports, now, forceRecent)
-  if (reclaimable.length > 0) {
-    const bytes = reclaimable.reduce((sum, path) => sum + path.bytes, 0)
-    lines.push(`  ${reclaimable.length} candidate path(s), ${formatBytes(bytes)}. Nothing has been changed.`)
-    lines.push('  Review `agent-knip prune --explain` before confirming with --yes.')
+  lines.push(
+    ...renderDecisionGroup('可移入隔离区', candidates, now, pathWidth, agentWidth, forceRecent, paint),
+    ...renderDecisionGroup('保留原位', kept, now, pathWidth, agentWidth, forceRecent, paint),
+    '',
+  )
+
+  if (candidates.length > 0) {
+    lines.push(`  ${candidates.length} 条路径符合隔离条件。本次未做任何修改。`)
+    lines.push('  使用 `agent-knip prune --agent <id>` 预览单个工具；确认后添加 `--yes`。')
   }
   else {
-    lines.push('  No cleanup candidates. Nothing has been changed.')
+    lines.push('  没有可移入隔离区的路径。本次未做任何修改。')
   }
 
   if (options.explain) {
@@ -129,29 +172,35 @@ export function formatReport(reports: AgentReport[], options: FormatOptions): st
   return `${lines.join('\n')}\n`
 }
 
-function groupHeading(group: Group, count: number, paint: Paint): string {
-  const title = `${group.title} (${count})`
-  if (!group.note) {
-    return `  ${title}`
+function renderDecisionGroup(
+  title: string,
+  items: DecisionItem[],
+  now: number,
+  pathWidth: number,
+  agentWidth: number,
+  forceRecent: boolean,
+  paint: Paint,
+): string[] {
+  if (items.length === 0) {
+    return []
   }
-  return `  ${title.padEnd(32)}${paint('dim', group.note)}`
+
+  const lines = ['', `  ${title} (${items.length})`]
+  if (items.some(item => item.path)) {
+    lines.push(tableHeader(pathWidth, agentWidth, paint))
+  }
+  for (const { report, path } of items) {
+    if (!path) {
+      lines.push(`  ${report.agent.name}: 未找到已登记的数据路径（使用 --explain 查看检测依据）`)
+      continue
+    }
+    lines.push(`  ${padText(formatPath(path), pathWidth)}  ${padText(formatAge(path.modifiedAt, now), 10, true)}  ${padText(report.agent.name, agentWidth)}  ${pathResult(report, path, now, forceRecent)}`)
+  }
+  return lines
 }
 
 function tableHeader(pathWidth: number, agentWidth: number, paint: Paint): string {
-  return paint('dim', `  ${COLUMNS.directory.padEnd(pathWidth)}  ${COLUMNS.size.padStart(8)}  ${COLUMNS.modified.padStart(8)}  ${COLUMNS.agent.padEnd(agentWidth)}  ${COLUMNS.result}`)
-}
-
-function renderGroup(members: AgentReport[], now: number, pathWidth: number, agentWidth: number, forceRecent: boolean): string[] {
-  const lines: string[] = []
-  for (const report of members) {
-    if (report.paths.length === 0) {
-      lines.push(`  ${report.agent.name}: ${report.reason ?? report.state}; no registered data path found (use --explain)`)
-    }
-    for (const path of report.paths) {
-      lines.push(`  ${formatPath(path).padEnd(pathWidth)}  ${formatBytes(path.bytes).padStart(8)}  ${formatAge(path.modifiedAt, now).padStart(8)}  ${report.agent.name.padEnd(agentWidth)}  ${pathResult(report, path, now, forceRecent)}`)
-    }
-  }
-  return lines
+  return paint('dim', `  ${padText(COLUMNS.directory, pathWidth)}  ${padText(COLUMNS.modified, 10, true)}  ${padText(COLUMNS.agent, agentWidth)}  ${COLUMNS.result}`)
 }
 
 function reclaimablePaths(reports: AgentReport[], now: number, forceRecent: boolean): PathReport[] {
@@ -161,26 +210,33 @@ function reclaimablePaths(reports: AgentReport[], now: number, forceRecent: bool
 function pathResult(report: AgentReport, path: PathReport, now: number, forceRecent: boolean): string {
   const reason = pruneBlockReason(report, path, now, forceRecent)
   if (!reason) {
-    return 'candidate (confirm)'
+    return '可移入隔离区（可还原）'
   }
-  return `kept: ${reason}`
+  if (reason === 'unknown') {
+    const failed = report.checks.find(check => check.status === 'error')
+    const detail = failed
+      ? `${SOURCE_LABELS[failed.source]}检查失败`
+      : '检测未完成'
+    return `需人工检查：${detail}（--explain 查看详情）`
+  }
+  return `保留：${formatReason(reason)}`
 }
 
 function explainReports(reports: AgentReport[], now: number, forceRecent: boolean): string[] {
   const lines = [
-    '  Explanation (local evidence only; missing evidence does not prove uninstallation)',
-    '  Not checked: OS uninstall registry, running processes, portable/WSL installs, shell history.',
+    '  检测依据（仅限本地线索；没有找到线索不代表已卸载）',
+    '  未检查：系统卸载注册表、运行中的进程、便携版或 WSL 安装、shell 历史。',
   ]
   for (const report of reports) {
-    lines.push(`  ${report.agent.name} [${report.agent.id}] registry=${report.agent.registry}, cleanupSupported=${report.cleanupSupported}`)
+    lines.push(`  ${report.agent.name} [${report.agent.id}]`)
     for (const check of report.checks) {
-      lines.push(`    ${check.source} [${check.status}] ${check.detail}`)
+      lines.push(`    ${SOURCE_LABELS[check.source]} [${STATUS_LABELS[check.status]}] ${check.detail}`)
     }
     for (const path of report.paths) {
-      lines.push(`    ${formatPath(path)} -> ${path.resolvedPath ?? '(unresolved)'}`)
-      lines.push(`      modified=${new Date(path.modifiedAt).toISOString()}, sizeComplete=${path.sizeComplete}, result=${pathResult(report, path, now, forceRecent)}`)
+      lines.push(`    路径 ${path.resolvedPath ?? formatPath(path)}`)
+      lines.push(`      修改时间=${new Date(path.modifiedAt).toISOString()}，目录树修改时间检查=${path.metadataComplete ? '完整' : '未完整检查'}，处理结果=${pathResult(report, path, now, forceRecent)}`)
     }
-    lines.push(`    Decision: ${report.reason ?? report.state}`)
+    lines.push(`    判定：${report.reason ?? STATE_LABELS[report.state]}`)
   }
   return lines
 }
@@ -189,13 +245,12 @@ export function formatJson(reports: AgentReport[], now: number): string {
   return JSON.stringify({
     version: SCHEMA_VERSION,
     scannedAt: now,
-    groups: Object.fromEntries(GROUPS.map(group => [
-      group.id,
-      reports.filter(report => reportGroup(report) === group.id).map(report => report.agent.id),
+    groups: Object.fromEntries(GROUP_IDS.map(id => [
+      id,
+      reports.filter(report => reportGroup(report) === id).map(report => report.agent.id),
     ])),
     candidates: reclaimablePaths(reports, now, false).map(path => ({
       path: formatPath(path),
-      bytes: path.bytes,
     })),
     agents: reports.map(report => ({
       ...report,

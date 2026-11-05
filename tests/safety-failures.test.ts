@@ -105,7 +105,7 @@ describe('fail-closed detection and recovery', () => {
       expect(pruneBlockReason(report, { ...path, modifiedAt: ctx.now - week }, ctx.now)).toBeUndefined()
       expect(pruneBlockReason(report, { ...path, modifiedAt: ctx.now - week + 1 }, ctx.now)).toBe('recent')
       expect(pruneBlockReason(report, { ...path, kind: 'credentials' }, ctx.now, true)).toBe('credentials')
-      expect(pruneBlockReason({ ...report, cleanupSupported: false }, path, ctx.now, true)).toBe('unverified-platform')
+      expect(pruneBlockReason({ ...report, state: 'installed' }, path, ctx.now, true)).toBe('install-found')
     }
     finally { await cleanup() }
   })

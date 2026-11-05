@@ -39,12 +39,11 @@ describe('restore', () => {
       from: join(home, '.legacy'),
       to: 'retired-agent/.legacy',
       kind: 'config',
-      bytes: 7,
     }
     const payload = join(dir, 'retired-agent', '.legacy')
     const manifestPath = join(dir, 'manifest.json')
     const manifest = {
-      version: 1,
+      version: 2,
       createdAt: 1,
       items: [item],
     }
@@ -63,7 +62,14 @@ describe('restore', () => {
   }
 
   it('restores a legacy v1 batch without consulting the registry or requiring a location role', async () => {
-    const { ctx, dir, item } = await createBatch()
+    const { ctx, dir, item, manifest, manifestPath } = await createBatch()
+    await writeFile(manifestPath, JSON.stringify({
+      ...manifest,
+      version: 1,
+      items: [
+        { ...item, bytes: 7 },
+      ],
+    }))
 
     expect(await restore(ctx)).toEqual({
       restored: [
@@ -83,7 +89,7 @@ describe('restore', () => {
     expect(await restore(ctx)).toEqual({
       restored: [],
       failed: [
-        { path: item.from, reason: 'target already exists' },
+        { path: item.from, reason: '目标路径已存在' },
       ],
       trash: [],
     })
@@ -142,7 +148,7 @@ describe('restore', () => {
     await symlink(outside, item.from, 'junction')
 
     expect((await restore(ctx)).failed).toEqual([
-      { path: item.from, reason: 'target already exists' },
+      { path: item.from, reason: '目标路径已存在' },
     ])
     expect((await lstat(item.from)).isSymbolicLink()).toBe(true)
     expect(await readFile(payload, 'utf8')).toBe('restore')
@@ -181,7 +187,7 @@ describe('restore', () => {
       { id: item.id, from: item.from },
     ])
     expect(result.failed).toEqual([
-      { path: conflict.from, reason: 'target already exists' },
+      { path: conflict.from, reason: '目标路径已存在' },
     ])
     expect(result.trash).toEqual([])
     expect(JSON.parse(await readFile(manifestPath, 'utf8'))).toEqual({
@@ -192,7 +198,7 @@ describe('restore', () => {
   })
 
   it.each([
-    ['version', 2],
+    ['version', 3],
     ['version', '1'],
     ['createdAt', 'yesterday'],
     ['createdAt', -1],
@@ -209,7 +215,7 @@ describe('restore', () => {
     expect(result.failed).toEqual([
       {
         path: dir,
-        reason: expect.stringMatching(/manifest/),
+        reason: expect.stringMatching(/隔离清单/),
       },
     ])
     expect(result.trash).toEqual([])
@@ -222,7 +228,7 @@ describe('restore', () => {
     const { ctx, payload, manifestPath } = await createBatch()
     await writeFile(manifestPath, json)
 
-    expect((await restore(ctx)).failed[0].reason).toMatch(/manifest/)
+    expect((await restore(ctx)).failed[0].reason).toMatch(/隔离清单/)
     expect(await readFile(manifestPath, 'utf8')).toBe(json)
     expect(await readFile(payload, 'utf8')).toBe('restore')
   })
@@ -233,8 +239,6 @@ describe('restore', () => {
     { id: 'not an id' },
     { from: 'relative' },
     { kind: 'unknown' },
-    { bytes: -1 },
-    { bytes: '7' },
   ])('rejects malformed item %j before moving any valid item', async (invalid) => {
     const { ctx, item, payload, manifest, manifestPath } = await createBatch()
     const json = JSON.stringify({
@@ -252,7 +256,7 @@ describe('restore', () => {
     const result = await restore(ctx)
 
     expect(result.restored).toEqual([])
-    expect(result.failed[0].reason).toMatch(/invalid/)
+    expect(result.failed[0].reason).toMatch(/无效/)
     expect(await readFile(payload, 'utf8')).toBe('restore')
     expect(await readFile(manifestPath, 'utf8')).toBe(json)
     await expect(lstat(item.from)).rejects.toMatchObject({ code: 'ENOENT' })
@@ -279,7 +283,7 @@ describe('restore', () => {
       ],
     }))
 
-    expect((await restore(ctx)).failed[0].reason).toMatch(/invalid/)
+    expect((await restore(ctx)).failed[0].reason).toMatch(/无效/)
     expect(await readFile(payload, 'utf8')).toBe('restore')
     await expect(lstat(join(home, 'new-parent'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
@@ -321,7 +325,7 @@ describe('restore', () => {
     const result = await restore(ctx)
 
     expect(result.restored).toEqual([])
-    expect(result.failed[0].reason).toMatch(/invalid/)
+    expect(result.failed[0].reason).toMatch(/无效/)
     expect(await readFile(payload, 'utf8')).toBe('restore')
     expect(await readFile(outside, 'utf8')).toBe('untouched')
     expect(await readFile(manifestPath, 'utf8')).toBe(json)
@@ -346,7 +350,6 @@ describe('restore', () => {
     'batch',
     'trash-root',
     'payload-ancestor',
-    'payload',
   ])('rejects a linked %s without following the junction', async (linked) => {
     const { ctx, home, dir, item, payload } = await createBatch()
     const outside = join(home, 'outside')
@@ -357,27 +360,38 @@ describe('restore', () => {
         : linked === 'payload-ancestor'
           ? dirname(payload)
           : payload
-    if (linked === 'payload') {
-      await unlink(payload)
-      await mkdir(outside)
-      await writeFile(join(outside, 'keep'), 'untouched')
-    }
-    else {
-      await rename(link, outside)
-    }
+    await rename(link, outside)
     await symlink(outside, link, 'junction')
 
     const result = await restore(ctx)
 
     expect(result.restored).toEqual([])
-    expect(result.failed[0].reason).toMatch(/link|junction/)
+    expect(result.failed[0].reason).toMatch(/符号链接|目录联接/)
     expect(result.trash).toEqual([])
     expect((await lstat(link)).isSymbolicLink()).toBe(true)
     await expect(lstat(item.from)).rejects.toMatchObject({ code: 'ENOENT' })
     expect((await lstat(outside)).isDirectory()).toBe(true)
-    if (linked === 'payload') {
-      expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('untouched')
-    }
+  })
+
+  it('restores a linked payload without touching its target', async () => {
+    const { ctx, home, dir, item, payload } = await createBatch()
+    const outside = join(home, 'outside')
+    await unlink(payload)
+    await mkdir(outside)
+    await writeFile(join(outside, 'keep'), 'untouched')
+    await symlink(outside, payload, 'junction')
+
+    const result = await restore(ctx)
+
+    expect(result.restored).toEqual([
+      {
+        id: item.id,
+        from: item.from,
+      },
+    ])
+    expect((await lstat(item.from)).isSymbolicLink()).toBe(true)
+    expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('untouched')
+    await expect(lstat(dir)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('rejects a manifest junction without entering its target directory', async () => {
@@ -388,7 +402,7 @@ describe('restore', () => {
     await unlink(manifestPath)
     await symlink(outside, manifestPath, 'junction')
 
-    expect((await restore(ctx)).failed[0].reason).toMatch(/link|junction/)
+    expect((await restore(ctx)).failed[0].reason).toMatch(/符号链接|目录联接/)
     expect((await lstat(manifestPath)).isSymbolicLink()).toBe(true)
     expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('untouched')
     expect(await readFile(payload, 'utf8')).toBe('restore')
@@ -435,7 +449,7 @@ describe('restore', () => {
       throw error
     }
 
-    expect((await restore(ctx)).failed[0].reason).toMatch(/link|junction/)
+    expect((await restore(ctx)).failed[0].reason).toMatch(/符号链接|目录联接/)
     expect(await readFile(outside, 'utf8')).toBe(json)
     expect(await readFile(payload, 'utf8')).toBe('restore')
     expect((await lstat(manifestPath)).isSymbolicLink()).toBe(true)
@@ -481,7 +495,7 @@ describe('restore', () => {
     expect(result.failed).toEqual([
       {
         path: dir,
-        reason: expect.stringMatching(/untracked payload/),
+        reason: expect.stringMatching(/未登记的数据/),
       },
     ])
     expect(result.trash).toEqual([])
@@ -500,7 +514,7 @@ describe('restore', () => {
     const link = join(dir, 'untracked')
     await symlink(outside, link, 'junction')
 
-    expect((await restore(ctx)).failed[0].reason).toMatch(/untracked payload/)
+    expect((await restore(ctx)).failed[0].reason).toMatch(/未登记的数据/)
     expect((await lstat(link)).isSymbolicLink()).toBe(true)
     expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('untouched')
   })
@@ -525,11 +539,11 @@ describe('restore', () => {
 
     const entries = await listTrash(ctx)
     expect(entries).toHaveLength(1)
-    expect(entries[0].error).toMatch(/manifest/)
+    expect(entries[0].error).toMatch(/隔离清单/)
     expect((await restore(ctx)).failed).toEqual([
       {
         path: dir,
-        reason: expect.stringMatching(/manifest/),
+        reason: expect.stringMatching(/隔离清单/),
       },
     ])
     expect(await readFile(payload, 'utf8')).toBe('restore')

@@ -21,6 +21,32 @@ describe('prune', () => {
     await temp?.cleanup()
   })
 
+  it('rejects calls without a single agent before creating quarantine data', async () => {
+    temp = await createTempHome({ platform: 'win32' })
+    const { ctx, home } = temp
+    // @ts-expect-error JavaScript callers can omit the required options.
+    await expect(prune(ctx)).rejects.toThrow('prune 必须指定一个 agent')
+    // @ts-expect-error JavaScript callers can omit the required selector.
+    await expect(prune(ctx, {})).rejects.toThrow('prune 必须指定一个 agent')
+    await expect(prune(ctx, { agent: '' })).rejects.toThrow('prune 必须指定一个 agent')
+    await expect(prune(ctx, { agent: 'claude,gemini' })).rejects.toThrow('未知 agent')
+    expect(await pathExists(join(home, '.agent-knip'))).toBe(false)
+  })
+
+  it('moves only the explicitly selected agent when other candidates exist', async () => {
+    temp = await createTempHome({ platform: 'win32' })
+    const { ctx, home } = temp
+    await mkdir(join(home, '.claude'))
+    await mkdir(join(home, '.gemini'))
+    await writeFile(join(home, '.gemini', 'session'), 'keep me')
+
+    const result = await prune(ctx, { agent: 'claude', forceRecent: true })
+
+    expect(result.moved.map(item => item.id)).toEqual(['claude'])
+    expect(await pathExists(join(home, '.claude'))).toBe(false)
+    expect(await readFile(join(home, '.gemini', 'session'), 'utf8')).toBe('keep me')
+  })
+
   it('moves an unused path to the trash and restores it', async () => {
     temp = await createTempHome({ platform: 'win32' })
     const { ctx, home } = temp
@@ -32,14 +58,15 @@ describe('prune', () => {
     const result = await prune({
       ...ctx,
       now: Date.now(),
-    })
+    }, { agent: 'claude' })
 
     expect(result.moved).toHaveLength(1)
     expect(result.trashDir).toBeTruthy()
     expect(await pathExists(join(home, '.claude'))).toBe(false)
 
     const manifest = JSON.parse(await readFile(join(result.trashDir!, 'manifest.json'), 'utf8'))
-    expect(manifest.version).toBe(1)
+    expect(manifest.version).toBe(2)
+    expect(manifest.items[0]).not.toHaveProperty('bytes')
     expect(manifest.items[0].from).toBe(join(home, '.claude'))
     expect(manifest.items[0].to).toBe('claude/.claude')
 
@@ -59,7 +86,7 @@ describe('prune', () => {
     const result = await prune({
       ...ctx,
       now: Date.now(),
-    })
+    }, { agent: 'claude' })
 
     expect(result.moved).toHaveLength(0)
     expect(result.trashDir).toBeUndefined()
@@ -78,7 +105,7 @@ describe('prune', () => {
     const result = await prune({
       ...ctx,
       now: Date.now(),
-    })
+    }, { agent: 'gemini' })
 
     expect(result.moved).toHaveLength(0)
     expect(result.skipped.some(skip => skip.reason === 'recent')).toBe(true)
@@ -94,7 +121,7 @@ describe('prune', () => {
     const result = await prune({
       ...ctx,
       now: Date.now(),
-    }, { forceRecent: true })
+    }, { agent: 'gemini', forceRecent: true })
 
     expect(result.moved).toHaveLength(1)
     expect(await pathExists(join(home, '.gemini'))).toBe(false)
@@ -117,7 +144,7 @@ describe('prune', () => {
         LOCALAPPDATA: join(home, 'AppData', 'Local'),
       },
       now: Date.now(),
-    })
+    }, { agent: 'zed' })
 
     expect(result.moved).toHaveLength(1)
     expect(result.moved[0].from).toBe(join(appdata, 'Zed'))
@@ -137,23 +164,28 @@ describe('prune', () => {
     expect(await readFile(join(appdata, 'Zed', 'settings.json'), 'utf8')).toBe('{"theme":"dark"}')
   })
 
-  it('never moves symlinks or junctions', async () => {
+  it('moves a symlink entry without touching its target, then restores it', async () => {
     temp = await createTempHome({ platform: 'win32' })
     const { ctx, home } = temp
-    await mkdir(join(home, 'cloud', 'cursor'), { recursive: true })
-    await writeFile(join(home, 'cloud', 'cursor', 'state.json'), '{}')
-    await symlink(join(home, 'cloud', 'cursor'), join(home, '.cursor'), process.platform === 'win32'
+    const target = join(home, 'cloud', 'cursor')
+    const link = join(home, '.claude')
+    await mkdir(target, { recursive: true })
+    await writeFile(join(target, 'state.json'), '{}')
+    await symlink(target, link, process.platform === 'win32'
       ? 'junction'
       : 'dir')
-    await age(join(home, 'cloud', 'cursor'), 30)
-
     const result = await prune({
       ...ctx,
       now: Date.now(),
-    })
+    }, { agent: 'claude', forceRecent: true })
 
-    expect(result.moved).toHaveLength(0)
-    expect(result.skipped.some(skip => skip.reason === 'symlink')).toBe(true)
-    expect(await pathExists(join(home, '.cursor'))).toBe(true)
+    expect(result.moved).toHaveLength(1)
+    expect(await pathExists(link)).toBe(false)
+    expect(await readFile(join(target, 'state.json'), 'utf8')).toBe('{}')
+
+    const restored = await restore(ctx)
+    expect(restored.restored).toHaveLength(1)
+    expect(await pathExists(link)).toBe(true)
+    expect(await readFile(join(target, 'state.json'), 'utf8')).toBe('{}')
   })
 })

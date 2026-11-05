@@ -19,32 +19,44 @@ async function oldData(target: string): Promise<void> {
 }
 
 describe('direction A policy', () => {
-  it('keeps generated references visible but never eligible, even when forced', async () => {
+  it('applies the same evidence and cleanup rules to every agent', async () => {
     const { ctx, home, cleanup } = await createTempHome({ platform: 'win32' })
     try {
       await oldData(join(home, '.config', 'amp'))
       const reports = await scan(ctx, { agent: 'amp' })
-      expect(reports[0].cleanupSupported).toBe(false)
-      expect(pruneBlockReason(reports[0], reports[0].paths[0], ctx.now, true)).toBe('reference-only')
-      expect(formatReport(reports, { now: ctx.now, forceRecent: true })).toContain('Reference only')
-      expect(JSON.parse(formatJson(reports, ctx.now)).candidates).toEqual([])
+      expect(reports[0].state).toBe('configured')
+      expect(pruneBlockReason(reports[0], reports[0].paths[0], ctx.now, true)).toBeUndefined()
+      expect(formatReport(reports, { now: ctx.now, forceRecent: true })).toContain('可移入隔离区（可还原）')
+      const json = JSON.parse(formatJson(reports, ctx.now))
+      expect(json.version).toBe(4)
+      expect(json.groups.noInstallFound).toEqual(['amp'])
+      expect(json.candidates).toEqual([
+        { path: '~/.config/amp' },
+      ])
+
       const result = await prune(ctx, { agent: 'amp', forceRecent: true })
-      expect(result.moved).toEqual([])
-      expect(result.trashDir).toBeUndefined()
+      expect(result.moved).toHaveLength(1)
+      expect(await readdir(home)).toContain('.agent-knip')
+      expect((await restore(ctx)).restored).toHaveLength(1)
       expect(await readFile(join(home, '.config', 'amp', 'session'), 'utf8')).toBe('keep me')
-      expect(await readdir(home)).not.toContain('.agent-knip')
     }
     finally { await cleanup() }
   })
 
-  it('does not grant cleanup to an unverified platform merely because it is curated', async () => {
-    const { ctx, home, cleanup } = await createTempHome({ platform: 'linux' })
+  it.each(['win32', 'linux', 'darwin'] as const)('allows curated cleanup on %s without a platform verification flag', async (platform) => {
+    const { ctx, home, cleanup } = await createTempHome({ platform })
     try {
       await oldData(join(home, '.claude'))
       const reports = await scan(ctx, { agent: 'claude' })
-      expect(reports[0].cleanupSupported).toBe(false)
-      expect(formatReport(reports, { now: ctx.now })).toContain('Check yourself')
-      expect((await prune(ctx, { agent: 'claude', forceRecent: true })).moved).toEqual([])
+      expect(reports[0].paths[0].metadataComplete).toBe(true)
+      expect(pruneBlockReason(reports[0], reports[0].paths[0], ctx.now)).toBeUndefined()
+      expect(formatReport(reports, { now: ctx.now })).toContain('可移入隔离区 (1)')
+      expect(JSON.parse(formatJson(reports, ctx.now)).candidates).toEqual([
+        { path: '~/.claude' },
+      ])
+      expect((await prune(ctx, { agent: 'claude' })).moved).toHaveLength(1)
+      expect((await restore(ctx)).restored).toHaveLength(1)
+      expect(await readFile(join(home, '.claude', 'session'), 'utf8')).toBe('keep me')
     }
     finally { await cleanup() }
   })
@@ -100,7 +112,7 @@ describe('direction A policy', () => {
         env: { ...ctx.env, APPDATA: './relative' },
       }, { agent: 'zed' })
       expect(reports[0].state).toBe('unknown')
-      expect(reports[0].checks.some(check => check.status === 'error' && check.detail.includes('absolute'))).toBe(true)
+      expect(reports[0].checks.some(check => check.status === 'error' && check.detail.includes('绝对路径'))).toBe(true)
     }
     finally { await cleanup() }
   })
@@ -115,7 +127,7 @@ describe('direction A policy', () => {
         env: { ...ctx.env, XDG_CONFIG_HOME: root, FLATPAK_XDG_CONFIG_HOME: root },
       }, { agent: 'zed' })
       expect(reports[0].paths).toHaveLength(1)
-      expect(reports[0].checks.some(check => check.detail.includes('duplicate'))).toBe(true)
+      expect(reports[0].checks.some(check => check.detail.includes('重复'))).toBe(true)
     }
     finally { await cleanup() }
   })

@@ -1,7 +1,7 @@
 {
   "name": "agent-knip",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packageManager": "pnpm@12.16.1",
   "description": "Find and trim leftover config directories of AI coding agents you no longer use",
   "author": "agent-knip contributors",
@@ -35,7 +35,8 @@
     "agent-knip": "./dist/cli.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "engines": {
     "node": ">=22"
@@ -46,7 +47,6 @@
     "lint": "eslint --cache",
     "typecheck": "tsc",
     "knip": "knip",
-    "gen:agents": "node scripts/sync-agents.mjs",
     "test": "pnpm run build && vitest",
     "ci": "pnpm run lint && pnpm run typecheck && pnpm run knip && pnpm run test --run"
   },
@@ -62,7 +62,6 @@
     "knip": "catalog:cli",
     "nano-staged": "catalog:cli",
     "simple-git-hooks": "catalog:cli",
-    "skills": "catalog:cli",
     "tsdown": "catalog:cli",
     "tsx": "catalog:cli",
     "typescript": "catalog:cli",

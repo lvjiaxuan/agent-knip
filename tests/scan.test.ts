@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import * as fileOps from '../src/fs'
 import { scan } from '../src/scan'
 import { createTempHome } from './test-utils'
 
@@ -22,7 +23,9 @@ describe('scan', () => {
       expect(reports[0].evidence).toEqual([])
       expect(reports[0].checks.some(check => check.status === 'not-found')).toBe(true)
       expect(reports[0].paths.map(path => path.path)).toEqual(['.claude'])
-      expect(reports[0].bytes).toBeGreaterThan(0)
+      expect(reports[0].paths[0].metadataComplete).toBe(true)
+      expect(reports[0]).not.toHaveProperty('bytes')
+      expect(reports[0].paths[0]).not.toHaveProperty('bytes')
     }
     finally {
       await cleanup()
@@ -43,8 +46,27 @@ describe('scan', () => {
 
       expect(reports[0].state).toBe('installed')
       expect(reports[0].evidence).toContain('npm:@anthropic-ai/claude-code')
+      expect(reports[0].paths[0].metadataComplete).toBe(false)
+      expect(reports[0].checks.some(check => check.status === 'error')).toBe(false)
     }
     finally {
+      await cleanup()
+    }
+  })
+
+  it('does not walk data directories when installation is already found', async () => {
+    const { ctx, home, cleanup } = await createTempHome({ platform: 'win32' })
+    const tree = vi.spyOn(fileOps, 'inspectTree')
+    try {
+      await mkdir(join(ctx.env.APPDATA!, 'npm', 'node_modules', '@anthropic-ai', 'claude-code'), { recursive: true })
+      await makeFile(join(home, '.claude', 'projects', 'session'))
+      const [report] = await scan(ctx, { agent: 'claude' })
+      expect(report.state).toBe('installed')
+      expect(report.paths[0].metadataComplete).toBe(false)
+      expect(tree).not.toHaveBeenCalled()
+    }
+    finally {
+      tree.mockRestore()
       await cleanup()
     }
   })

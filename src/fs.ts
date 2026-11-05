@@ -2,37 +2,31 @@ import { statSync } from 'node:fs'
 import { lstat, readdir, rename } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export interface MeasuredPath {
+export interface PathMetadata {
   exists: boolean
   symlink: boolean
-  bytes: number
-  complete: boolean
+  metadataComplete: boolean
   modifiedAt: number
   error?: string
 }
 
-interface DirectoryUsage {
-  bytes: number
-  complete: boolean
-  modifiedAt: number
-}
-
-/**
- * Measure one path. Symlinks are reported, never followed. A `deadline`
- * (epoch ms) degrades the walk to `complete: false` instead of hanging.
- */
-export async function measurePath(target: string, deadline = Number.POSITIVE_INFINITY): Promise<MeasuredPath> {
-  let stats
+/** Inspect only the path itself; directory contents are not read. */
+export async function inspectPath(target: string): Promise<PathMetadata> {
   try {
-    stats = await lstat(target)
+    const stats = await lstat(target)
+    return {
+      exists: true,
+      symlink: stats.isSymbolicLink(),
+      metadataComplete: !stats.isDirectory(),
+      modifiedAt: stats.mtimeMs,
+    }
   }
   catch (error) {
-    const missing = (error as NodeJS.ErrnoException).code === 'ENOENT'
+    const missing = errorCode(error) === 'ENOENT'
     return {
       exists: !missing,
       symlink: false,
-      bytes: 0,
-      complete: missing,
+      metadataComplete: missing,
       modifiedAt: 0,
       ...(missing
         ? {}
@@ -41,81 +35,47 @@ export async function measurePath(target: string, deadline = Number.POSITIVE_INF
           }),
     }
   }
-
-  if (stats.isSymbolicLink()) {
-    return {
-      exists: true,
-      symlink: true,
-      bytes: 0,
-      complete: true,
-      modifiedAt: stats.mtimeMs,
-    }
-  }
-  if (!stats.isDirectory()) {
-    return {
-      exists: true,
-      symlink: false,
-      bytes: stats.size,
-      complete: true,
-      modifiedAt: stats.mtimeMs,
-    }
-  }
-
-  const usage = await walk(target, stats.mtimeMs, deadline)
-  return { exists: true, symlink: false, ...usage }
 }
 
-async function walk(root: string, rootMtime: number, deadline: number): Promise<DirectoryUsage> {
-  const total: DirectoryUsage = { bytes: 0, complete: true, modifiedAt: rootMtime }
-  const stack = [root]
-
+/** Check tree modification times for cleanup without following links. */
+export async function inspectTree(target: string, deadline: number): Promise<PathMetadata> {
+  const result = await inspectPath(target)
+  if (!result.exists || result.error || result.symlink || result.metadataComplete) {
+    return result
+  }
+  const stack = [target]
+  result.metadataComplete = true
   while (stack.length > 0) {
     if (Date.now() > deadline) {
-      total.complete = false
+      result.metadataComplete = false
       break
     }
-    const usage = await readDirectory(stack.pop()!, stack)
-    total.bytes += usage.bytes
-    total.modifiedAt = Math.max(total.modifiedAt, usage.modifiedAt)
-    total.complete = total.complete && usage.complete
-  }
-
-  return total
-}
-
-/** Adds child directories to the stack; counts files, never follows links. */
-async function readDirectory(dir: string, stack: string[]): Promise<DirectoryUsage> {
-  let names: string[]
-  try {
-    names = await readdir(dir)
-  }
-  catch {
-    return { bytes: 0, complete: false, modifiedAt: 0 }
-  }
-
-  const usage: DirectoryUsage = { bytes: 0, complete: true, modifiedAt: 0 }
-  for (const name of names) {
-    const path = join(dir, name)
-    let stats
+    const dir = stack.pop()!
+    let names: string[]
     try {
-      stats = await lstat(path)
+      names = await readdir(dir)
     }
-    catch {
-      usage.complete = false
+    catch (error) {
+      result.metadataComplete = false
+      result.error ??= `${dir}: ${errorCode(error)}`
       continue
     }
-    usage.modifiedAt = Math.max(usage.modifiedAt, stats.mtimeMs)
-    if (stats.isSymbolicLink()) {
-      continue
-    }
-    if (stats.isDirectory()) {
-      stack.push(path)
-    }
-    else {
-      usage.bytes += stats.size
+    for (const name of names) {
+      const path = join(dir, name)
+      try {
+        const stats = await lstat(path)
+        result.modifiedAt = Math.max(result.modifiedAt, stats.mtimeMs)
+        if (stats.isDirectory() && !stats.isSymbolicLink()) {
+          stack.push(path)
+        }
+      }
+      catch (error) {
+        result.metadataComplete = false
+        result.error ??= `${path}: ${errorCode(error)}`
+      }
     }
   }
-  return usage
+  return result
 }
 
 export async function pathExists(path: string): Promise<boolean> {

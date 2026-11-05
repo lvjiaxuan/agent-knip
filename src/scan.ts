@@ -2,11 +2,11 @@ import type { AgentReport, AgentSpec, Ctx, EvidenceCheck, Location, PathReport, 
 import { lstat, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { agents } from './agents'
-import { SIZE_BUDGET_MS, WEIGHT } from './constants'
+import { METADATA_BUDGET_MS, WEIGHT } from './constants'
 import { findBinary } from './detect/binary'
 import { findPackageRecord } from './detect/packages'
 import { probeBinary } from './detect/probe'
-import { errorCode, measurePath } from './fs'
+import { errorCode, inspectPath, inspectTree } from './fs'
 import { hasLinkedAncestor, resolveLocation, validRelativePath } from './locations'
 import { pruneBlockReason } from './policy'
 
@@ -19,7 +19,7 @@ interface Inspection {
 
 export async function scan(ctx: Ctx, options: ScanOptions = {}): Promise<AgentReport[]> {
   if (options.agent && !agents.some(agent => agent.id === options.agent)) {
-    throw new Error(`Unknown agent: ${options.agent}`)
+    throw new Error(`未知 agent：${options.agent}`)
   }
   const reports: AgentReport[] = []
   // Output filters must not bypass overlapping/shared-directory protection.
@@ -42,25 +42,35 @@ async function inspectAgent(ctx: Ctx, spec: AgentSpec, probe: ProbeFn, includeEm
   const checks: EvidenceCheck[] = []
   const { paths, installs } = await collectLocations(ctx, spec, checks)
   const inspection = await collectEvidence(ctx, spec, probe, installs, checks)
-  if (paths.length === 0 && inspection.evidence.length === 0 && (spec.registry === 'reference' || inspection.state !== 'unknown') && !includeEmpty) {
+  if (paths.length === 0 && inspection.evidence.length === 0 && inspection.state !== 'unknown' && !includeEmpty) {
     return undefined
   }
-  const cleanupSupported = spec.registry === 'curated' && Boolean(spec.verifiedPlatforms?.includes(ctx.platform))
-  checks.push({
-    source: 'policy',
-    status: cleanupSupported ? 'found' : 'skipped',
-    detail: spec.registry === 'reference'
-      ? 'Reference registry: cleanup is disabled on every platform.'
-      : `Cleanup support for ${ctx.platform}: ${cleanupSupported ? 'verified' : 'not verified'}.`,
-  })
+  if (inspection.state === 'configured') {
+    await inspectCleanupMetadata(paths, checks)
+  }
   return {
     agent: spec,
     ...inspection,
-    cleanupSupported,
     checks,
     paths,
-    bytes: paths.reduce((sum, path) => sum + path.bytes, 0),
     skips: [],
+  }
+}
+
+async function inspectCleanupMetadata(paths: PathReport[], checks: EvidenceCheck[]): Promise<void> {
+  const deadline = Date.now() + METADATA_BUDGET_MS
+  for (const path of paths) {
+    if (path.symlink || path.blockedReason || path.kind === 'credentials')
+      continue
+    const metadata = await inspectTree(path.resolvedPath!, deadline)
+    path.modifiedAt = metadata.modifiedAt
+    path.metadataComplete = metadata.metadataComplete
+    path.symlink = metadata.symlink
+    path.error = metadata.error
+    if (!metadata.exists || !metadata.metadataComplete) {
+      path.error = metadata.error ?? '修改时间检查未完成，或路径已不存在'
+      checks.push({ source: 'location', status: 'error', detail: `${path.resolvedPath}: ${path.error}；已阻止清理` })
+    }
   }
 }
 
@@ -68,12 +78,11 @@ async function collectLocations(ctx: Ctx, spec: AgentSpec, checks: EvidenceCheck
   const paths: PathReport[] = []
   const installs: string[] = []
   const seen = new Set<string>()
-  const deadline = Date.now() + SIZE_BUDGET_MS
   for (const location of spec.locations) {
     try {
       const resolved = resolveLocation(ctx, location)
       if (!resolved) {
-        checks.push({ source: 'location', status: 'skipped', detail: `${location.path}: platform or optional base not applicable` })
+        checks.push({ source: 'location', status: 'skipped', detail: `${location.path}: 当前平台不适用，或未提供可选的基础目录` })
         continue
       }
       if (location.role === 'install') {
@@ -82,11 +91,11 @@ async function collectLocations(ctx: Ctx, spec: AgentSpec, checks: EvidenceCheck
       }
       const key = pathKey(resolved.path, ctx.platform)
       if (seen.has(key)) {
-        checks.push({ source: 'location', status: 'skipped', detail: `${resolved.path}: duplicate resolved data location` })
+        checks.push({ source: 'location', status: 'skipped', detail: `${resolved.path}: 解析后的数据路径重复` })
         continue
       }
       seen.add(key)
-      const path = await inspectData(location, resolved, deadline, checks)
+      const path = await inspectData(ctx, location, resolved, checks)
       if (path)
         paths.push(path)
     }
@@ -97,20 +106,21 @@ async function collectLocations(ctx: Ctx, spec: AgentSpec, checks: EvidenceCheck
   return { paths, installs }
 }
 
-async function inspectData(location: Location, resolved: { path: string, root: string }, deadline: number, checks: EvidenceCheck[]): Promise<PathReport | undefined> {
+async function inspectData(ctx: Ctx, location: Location, resolved: { path: string, root: string }, checks: EvidenceCheck[]): Promise<PathReport | undefined> {
   const linked = await hasLinkedAncestor(resolved)
-  const measured = await measurePath(resolved.path, linked ? 0 : deadline)
+  const metadata = await inspectPath(resolved.path)
   checks.push({
     source: 'location',
-    status: measured.exists ? 'found' : 'not-found',
-    detail: `data ${resolved.path}`,
+    status: metadata.error
+      ? 'error'
+      : metadata.exists ? 'found' : 'not-found',
+    detail: `数据路径 ${resolved.path}${metadata.error
+      ? `: ${metadata.error}`
+      : ''}`,
   })
-  if (!measured.exists)
+  if (!metadata.exists)
     return undefined
-  if (!measured.complete && !linked) {
-    checks.push({ source: 'location', status: 'error', detail: `${resolved.path}: size/mtime walk incomplete; cleanup blocked` })
-  }
-  const blockedReason = measured.error
+  const blockedReason = metadata.error
     ? 'unreadable'
     : await dataBlock(location, resolved.path, linked)
   return {
@@ -118,15 +128,17 @@ async function inspectData(location: Location, resolved: { path: string, root: s
     ...(location.base
       ? { base: location.base }
       : {}),
+    ...(location.env && ctx.env[location.env]?.trim()
+      ? { env: location.env }
+      : {}),
     resolvedPath: resolved.path,
     type: location.type,
     kind: location.kind,
-    bytes: measured.bytes,
-    sizeComplete: measured.complete,
-    modifiedAt: measured.modifiedAt,
-    symlink: measured.symlink || linked,
-    ...(measured.error
-      ? { error: measured.error }
+    metadataComplete: metadata.metadataComplete,
+    modifiedAt: metadata.modifiedAt,
+    symlink: metadata.symlink || linked,
+    ...(metadata.error
+      ? { error: metadata.error }
       : {}),
     ...(blockedReason
       ? { blockedReason }
@@ -152,7 +164,7 @@ async function inspectInstall(path: string, installs: string[], checks: Evidence
     checks.push({
       source: 'location',
       status: found ? 'found' : 'error',
-      detail: `install ${path}${found ? '' : ': not a directory'}`,
+      detail: `安装路径 ${path}${found ? '' : '：不是目录'}`,
     })
     if (found) {
       installs.push(`app:${path}`)
@@ -163,7 +175,7 @@ async function inspectInstall(path: string, installs: string[], checks: Evidence
     checks.push({
       source: 'location',
       status: missing ? 'not-found' : 'error',
-      detail: `install ${path}: ${errorCode(error)}`,
+      detail: `安装路径 ${path}: ${errorCode(error)}`,
     })
   }
 }
@@ -171,7 +183,7 @@ async function inspectInstall(path: string, installs: string[], checks: Evidence
 async function credentialBlock(location: Location, absolute: string): Promise<string | undefined> {
   for (const file of location.protectedFiles ?? []) {
     if (!validRelativePath(file)) {
-      throw new Error('Invalid protected filename')
+      throw new Error('受保护文件名无效')
     }
     try {
       await lstat(join(absolute, ...file.split('/')))
@@ -190,22 +202,13 @@ async function collectEvidence(ctx: Ctx, spec: AgentSpec, probe: ProbeFn, instal
   let score = installs.length > 0
     ? WEIGHT.app
     : 0
-  if (spec.registry === 'reference') {
-    checks.push({ source: 'policy', status: 'skipped', detail: 'Unverified reference: directory presence is not install evidence.' })
-    return {
-      evidence: [],
-      score: 0,
-      state: 'unknown',
-      reason: 'reference-only registry',
-    }
-  }
   let source: EvidenceCheck['source'] = 'package'
   try {
     const record = findPackageRecord(ctx, spec)
     checks.push({
       source: 'package',
       status: record ? 'found' : 'not-found',
-      detail: record ?? 'No record in the supported fixed npm/pipx locations (not a complete package inventory).',
+      detail: record ?? '在支持的固定 npm/pipx 目录中未找到记录（未检查全部已安装包）。',
     })
     if (record) {
       evidence.push(record)
@@ -216,7 +219,7 @@ async function collectEvidence(ctx: Ctx, spec: AgentSpec, probe: ProbeFn, instal
     checks.push({
       source: 'binary',
       status: bin ? 'found' : 'not-found',
-      detail: bin?.path ?? `PATH: no match for ${(spec.bins ?? []).join(', ')}`,
+      detail: bin?.path ?? `PATH 中未找到匹配命令：${(spec.bins ?? []).join(', ')}`,
     })
     if (bin) {
       evidence.push(`bin:${bin.path}`)
@@ -226,7 +229,7 @@ async function collectEvidence(ctx: Ctx, spec: AgentSpec, probe: ProbeFn, instal
     score += await inspectProbe(bin, installs.length > 0 || Boolean(record), probe, checks)
   }
   catch (error) {
-    checks.push({ source, status: 'error', detail: `Install evidence could not be collected: ${errorCode(error)}` })
+    checks.push({ source, status: 'error', detail: `无法收集安装依据：${errorCode(error)}` })
   }
   const failed = checks.some(check => check.status === 'error')
   if (failed) {
@@ -234,7 +237,7 @@ async function collectEvidence(ctx: Ctx, spec: AgentSpec, probe: ProbeFn, instal
       evidence,
       score,
       state: 'unknown',
-      reason: 'a detection check failed or could not be completed',
+      reason: '某项检测失败或未能完成',
     }
   }
   if (evidence.length > 0) {
@@ -244,20 +247,20 @@ async function collectEvidence(ctx: Ctx, spec: AgentSpec, probe: ProbeFn, instal
     evidence,
     score,
     state: 'configured',
-    reason: 'No supported install evidence found; this does not prove uninstallation.',
+    reason: '在支持的检查范围内未找到安装依据；这不能证明已卸载。',
   }
 }
 
 async function inspectProbe(bin: ReturnType<typeof findBinary>, hasInstall: boolean, probe: ProbeFn, checks: EvidenceCheck[]): Promise<number> {
   if (!bin || hasInstall || !bin.probeable) {
-    checks.push({ source: 'probe', status: 'skipped', detail: 'No binary, existing install evidence, or shell shim: --version not executed.' })
+    checks.push({ source: 'probe', status: 'skipped', detail: '未执行 --version：未找到命令、已有安装依据，或命令是 shell 包装脚本。' })
     return 0
   }
   const alive = await probe(bin.path)
   checks.push({
     source: 'probe',
     status: alive ? 'found' : 'error',
-    detail: `${bin.path} --version ${alive ? 'succeeded' : 'failed or timed out'}`,
+    detail: `${bin.path} --version ${alive ? '执行成功' : '执行失败或超时'}`,
   })
   return alive ? WEIGHT.probe : 0
 }

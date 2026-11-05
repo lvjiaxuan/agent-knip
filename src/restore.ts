@@ -35,12 +35,12 @@ export async function listTrash(ctx: Ctx): Promise<TrashEntry[]> {
       const manifestPath = join(dir, 'manifest.json')
       await assertNoLinks(manifestPath)
       if (!(await lstat(manifestPath)).isFile()) {
-        throw new Error('manifest is not a regular file')
+        throw new Error('隔离清单不是普通文件')
       }
       const manifest = validateManifest(JSON.parse(await readFile(manifestPath, 'utf8')), dir)
       // Validate every item before the first move or manifest rewrite in this batch.
       for (const item of manifest.items) {
-        await assertNoLinks(payloadPath(dir, item), true)
+        await assertNoLinks(payloadPath(dir, item), true, true)
         await assertNoLinks(dirname(item.from), true)
       }
       entries.push({ dir, createdAt: manifest.createdAt, items: manifest.items })
@@ -50,7 +50,7 @@ export async function listTrash(ctx: Ctx): Promise<TrashEntry[]> {
         dir,
         createdAt: 0,
         items: [],
-        error: `manifest or payload invalid: ${errorCode(error)}`,
+        error: `隔离清单或隔离数据无效：${errorCode(error)}`,
       })
     }
   }
@@ -60,13 +60,13 @@ export async function listTrash(ctx: Ctx): Promise<TrashEntry[]> {
 
 function validateManifest(value: unknown, dir: string): Manifest {
   if (!value || typeof value !== 'object') {
-    throw new Error('invalid manifest')
+    throw new Error('隔离清单无效')
   }
   const manifest = value as Partial<Manifest>
-  if (manifest.version !== MANIFEST_VERSION
+  if (![1, MANIFEST_VERSION].includes(manifest.version!)
     || typeof manifest.createdAt !== 'number' || !Number.isFinite(manifest.createdAt) || manifest.createdAt < 0
     || !Array.isArray(manifest.items)) {
-    throw new Error('invalid manifest version, createdAt, or items')
+    throw new Error('隔离清单的版本、创建时间或条目列表无效')
   }
   const sources: string[] = []
   for (const item of manifest.items) {
@@ -80,9 +80,8 @@ function validateManifest(value: unknown, dir: string): Manifest {
         'history',
         'cache',
         'credentials',
-      ].includes(item.kind)
-      || typeof item.bytes !== 'number' || !Number.isFinite(item.bytes) || item.bytes < 0) {
-      throw new Error('invalid manifest item')
+      ].includes(item.kind)) {
+      throw new Error('隔离清单条目无效')
     }
     const source = payloadPath(dir, item)
     const inside = relative(dir, source)
@@ -95,7 +94,7 @@ function validateManifest(value: unknown, dir: string): Manifest {
     if (!inside || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)
       || sourceKey === manifestKey
       || sources.some(other => sourceKey === other || sourceKey.startsWith(`${other}${sep}`) || other.startsWith(`${sourceKey}${sep}`))) {
-      throw new Error('invalid or overlapping payload path')
+      throw new Error('隔离数据路径无效或相互重叠')
     }
     sources.push(sourceKey)
   }
@@ -114,9 +113,10 @@ function payloadPath(dir: string, item: ManifestItem): string {
 }
 
 /** Check from the filesystem root down, never lstat through an unchecked link. */
-async function assertNoLinks(path: string, allowMissing = false): Promise<void> {
+async function assertNoLinks(path: string, allowMissing = false, allowLeafLink = false): Promise<void> {
+  const target = resolve(path)
   const ancestors: string[] = []
-  for (let current = resolve(path); ; current = dirname(current)) {
+  for (let current = target; ; current = dirname(current)) {
     ancestors.push(current)
     if (dirname(current) === current) {
       break
@@ -124,9 +124,7 @@ async function assertNoLinks(path: string, allowMissing = false): Promise<void> 
   }
   for (const ancestor of ancestors.reverse()) {
     try {
-      if ((await lstat(ancestor)).isSymbolicLink()) {
-        throw new Error(`symbolic link or junction refused: ${ancestor}`)
-      }
+      await assertNoLink(ancestor, target, allowLeafLink)
     }
     catch (error) {
       if (allowMissing && errorCode(error) === 'ENOENT') {
@@ -135,6 +133,13 @@ async function assertNoLinks(path: string, allowMissing = false): Promise<void> 
       throw error
     }
   }
+}
+
+async function assertNoLink(path: string, target: string, allowLeafLink: boolean): Promise<void> {
+  if (!(await lstat(path)).isSymbolicLink() || (allowLeafLink && path === target)) {
+    return
+  }
+  throw new Error(`拒绝访问符号链接或目录联接：${path}`)
 }
 
 /** Remove directories only if empty; files and links are untracked payload. */
@@ -176,7 +181,7 @@ async function finishBatch(entry: TrashEntry, pending: ManifestItem[], result: R
     result.trash.push(entry.dir)
   }
   else {
-    result.failed.push({ path: entry.dir, reason: 'untracked payload remains in trash' })
+    result.failed.push({ path: entry.dir, reason: '隔离区中仍有未登记的数据' })
   }
 }
 
@@ -198,13 +203,13 @@ export async function restore(ctx: Ctx): Promise<RestoreResult> {
 
     for (const item of entry.items) {
       if (await pathExists(item.from)) {
-        result.failed.push({ path: item.from, reason: 'target already exists' })
+        result.failed.push({ path: item.from, reason: '目标路径已存在' })
         pending.push(item)
         continue
       }
 
       try {
-        await assertNoLinks(payloadPath(entry.dir, item))
+        await assertNoLinks(payloadPath(entry.dir, item), false, true)
         await assertNoLinks(dirname(item.from), true)
         await mkdir(dirname(item.from), { recursive: true })
         await movePath(payloadPath(entry.dir, item), item.from)
