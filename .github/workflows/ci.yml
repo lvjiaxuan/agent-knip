@@ -1,24 +1,21 @@
-name: CI
+name: Unit Test
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
+    branches: [main]
+
+permissions: {}
 
 jobs:
-  ci:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
-        with:
-          node-version: lts/*
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run ci
+  unit-test:
+    uses: sxzz/workflows/.github/workflows/unit-test.yml@main
+    with:
+      test: pnpm exec vitest run
+
+  # coverage:
+  #   uses: sxzz/workflows/.github/workflows/coverage.yml@main
+  #   needs: unit-test
+  #   permissions:
+  #     id-token: write
