@@ -1,7 +1,7 @@
 {
   "name": "agent-knip",
   "type": "module",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "packageManager": "pnpm@12.16.1",
   "description": "Find and trim leftover config directories of AI coding agents you no longer use",
   "author": "agent-knip contributors",
@@ -43,6 +43,7 @@
   },
   "scripts": {
     "build": "tsdown",
+    "prepack": "pnpm run build",
     "dev": "tsx src/cli.ts",
     "lint": "eslint --cache",
     "typecheck": "tsc",
